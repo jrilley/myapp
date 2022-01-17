@@ -1,0 +1,17 @@
+.dialogItem {
+    list-style: none;
+    padding-bottom: 10px;
+}
+
+.dialogItem a {
+    text-decoration: none;
+    color: #444;
+}
+
+.dialogItem a:hover {
+    color: #b99d61 !important;
+}
+
+.dialogItem.active {
+    color: #b99d61 !important;
+}

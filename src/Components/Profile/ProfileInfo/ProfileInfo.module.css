@@ -1,0 +1,35 @@
+.cover_image img {
+    height: 200px;
+    width: 100%;
+    object-fit: cover;
+    border-radius: 15px 15px 0 0;
+}
+
+.content {
+  padding: 20px;
+  display: grid;
+  gap: 0 0;
+  grid-template-columns: 3fr 9fr;
+}
+
+.content .avatar {
+  margin: 0 auto;
+  padding-right: 20px;
+  border-right: 3px solid rgb(220, 218, 218);
+}
+
+.content .avatar img {
+  width: 150px;
+  border-radius: 50%;
+}
+
+.content .description p {
+  padding-bottom: 10px;
+  font-size: 14px;
+  font-weight: 400;
+  color: #444;
+}
+
+.content .description p strong {
+  font-weight: 500;
+}

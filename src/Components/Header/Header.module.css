@@ -1,0 +1,14 @@
+.header {
+    grid-area: header;
+    height: 50px;
+    background-color: rgba(255, 255, 255, 0.45);
+    border-radius: 0 0 15px 15px;
+  }
+  
+.header_logo {
+    float: left;
+}
+
+.header_search {
+    float: right;
+}

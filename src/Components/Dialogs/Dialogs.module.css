@@ -1,0 +1,53 @@
+.dialogs {
+    padding: 20px;
+    display: grid;
+    grid-template-columns: 2fr 10fr;
+}
+
+.dialog {
+    min-height: 510px;
+    border-right: 3px solid rgb(220, 218, 218);
+}
+
+.messages {
+    margin-left: 20px;
+    display: grid;
+    grid-template-rows: 9fr 150px;
+}
+
+.sendMessage {
+    display: grid;
+    grid-template-columns: 11fr 1fr;
+    min-width: 90%;
+}
+
+.sendMessage textarea {
+    border: 2px solid rgb(220, 218, 218);
+    resize: none;
+    min-height: 100px;
+    font-size: 14px;
+    padding: 10px;
+}
+
+.sendMessage textarea:focus {
+    border: 2px solid rgb(220, 218, 218);
+    outline: none;
+}
+
+.sendMessage button {
+    margin: auto;
+    margin-left: 5px;
+    padding: 4px;
+    width: 71px;
+    height: 50px;
+    border: 1px solid #444;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.sendMessage button:hover {
+    background-color: #444;
+    cursor: pointer;
+    color: white;
+}

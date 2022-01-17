@@ -1,0 +1,32 @@
+.nav_menu {
+  grid-area: navM;
+  background-color: rgba(255, 255, 255, 0.45);
+  border-radius: 15px;
+  max-height: 170px;
+}
+
+.nav_menu ul {
+  padding: 0;
+  list-style: none;
+}
+
+.nav_menu ul li a {
+  border-bottom: 1px solid #444;
+  text-decoration: none;
+  text-align: center;
+  outline: none;
+  display: block;
+  padding: 6px 0;
+  letter-spacing: 1px;
+  font-weight: 300;
+  color: #444;
+  transition: .3s linear;
+}
+
+.nav_menu ul li a:hover {
+  color: #b99d61;
+}
+
+.nav_menu ul li a.activeLink {
+  color: #b99d61 !important;
+}
