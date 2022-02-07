@@ -1,3 +1,4 @@
+import React from 'react';
 import styles from './Friends.module.css';
 import avatar from '../Profile/images/ava.jpg';
 import { FriendItem } from './FriendItem/FriendItem';

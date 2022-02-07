@@ -7,6 +7,11 @@
   
 .header_logo {
     float: left;
+    margin: 5px 10px;
+}
+
+.header_logo img {
+    width: 32px;
 }
 
 .header_search {

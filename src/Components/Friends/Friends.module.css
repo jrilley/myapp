@@ -29,8 +29,9 @@
 }
 
 .follow button {
+    background: rgb(64, 199, 130);
     padding: 4px;
-    width: 71px;
+    width: px;
     height: 30px;
     border: 1px solid #444;
     border-radius: 5px;
@@ -40,7 +41,7 @@
 }
 
 .follow button:hover {
-    background-color: #444;
+    background-color: rgb(67, 142, 187);
     cursor: pointer;
     color: white;
 }

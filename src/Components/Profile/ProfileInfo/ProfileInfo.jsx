@@ -1,3 +1,4 @@
+import React from 'react';
 import styles from './ProfileInfo.module.css';
 import avatar from '../images/ava.jpg';
 import coverImg from '../images/cover.jpg';
