@@ -4,7 +4,6 @@ import { MessageItem } from './MessageItem/MessageItem';
 import styles from './Dialogs.module.css';
 
 const Dialogs = (props) => {
-  debugger;
   const dialogsElements = props.dialogsReducer.dialogs.map( dialog => <DialogItem name={dialog.name} id={dialog.id} /> )
   const messagesElements = props.dialogsReducer.messages.map( msg => <MessageItem message={msg.message} /> )
 
@@ -12,7 +11,6 @@ const Dialogs = (props) => {
 
   const onMessageChange = () => {
     const text = messageText.current.value;
-    // alert(text);
     props.updateNewMessageText(text);
   }
 

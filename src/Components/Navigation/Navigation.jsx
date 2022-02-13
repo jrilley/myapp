@@ -21,9 +21,9 @@ const Navigation = () => {
               >Messages</NavLink>
           </li>
           <li><NavLink
-                to="/friends"
+                to="/users"
                 className={setActive}
-          >Friends</NavLink></li>
+          >Users</NavLink></li>
           <li><a href="#s">Settings</a></li>
         </ul>
       </nav>

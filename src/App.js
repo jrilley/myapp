@@ -5,7 +5,7 @@ import { DialogsContainer } from './Components/Dialogs/DialogsContainer';
 import { Header } from './Components/Header/Header';
 import { Navigation } from './Components/Navigation/Navigation';
 import { Profile } from './Components/Profile/Profile';
-import { FriendsContainer } from './Components/Friends/FriendsContainer';
+import { UsersContainer } from './Components/Users/UsersContainer';
 
 
 const App = (props) => {
@@ -17,7 +17,7 @@ const App = (props) => {
         <Routes>
           <Route index element={<Profile />} />
           <Route path='dialogs' element={<DialogsContainer />} />
-          <Route path='friends' element={<FriendsContainer />} />
+          <Route path='users' element={<UsersContainer />} />
         </Routes>
       </div>
     </div>
