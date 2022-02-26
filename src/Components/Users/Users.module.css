@@ -68,3 +68,7 @@
     cursor: pointer;
     color: black;
 }
+
+.currentPage {
+    font-weight: bold;
+}
