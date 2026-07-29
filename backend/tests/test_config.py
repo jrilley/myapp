@@ -4,11 +4,38 @@
 який у розробника заповнений, а в CI відсутній.
 """
 
-from app.config import Settings
+from app.config import Settings, env_file_for
 
 
 def _settings(**overrides) -> Settings:
     return Settings(_env_file=None, **overrides)
+
+
+def test_default_env_file_is_production():
+    assert env_file_for("") == ".env"
+
+
+def test_app_env_selects_separate_env_file():
+    """APP_ENV=test має вести на окремий конфіг — це вся ізоляція
+    тестового інстансу від робочого бота."""
+    assert env_file_for("test") == ".env.test"
+
+
+def test_env_file_read_from_environment(monkeypatch):
+    monkeypatch.delenv("APP_ENV", raising=False)
+    assert env_file_for() == ".env"
+
+    monkeypatch.setenv("APP_ENV", "test")
+    assert env_file_for() == ".env.test"
+
+    # Пробіли з .env або з оболонки не мають створювати файл ".env. "
+    monkeypatch.setenv("APP_ENV", "  ")
+    assert env_file_for() == ".env"
+
+
+def test_env_label_reports_instance():
+    assert _settings().env_label == "prod"
+    assert _settings(app_env="test").env_label == "test"
 
 
 def test_blank_values_from_env_example_do_not_crash():

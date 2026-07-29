@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -5,15 +6,32 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def env_file_for(app_env: str | None = None) -> str:
+    """Обирає файл конфігурації за APP_ENV.
+
+    APP_ENV не заданий → `.env`      (робочий бот, робоча БД, робоча група)
+    APP_ENV=test       → `.env.test` (тестовий бот, окрема БД, окрема група)
+
+    Так одна кодова база обслуговує два повністю ізольовані інстанси, і
+    тестування ніяк не торкається робочого бота.
+    """
+    suffix = (app_env if app_env is not None else os.getenv("APP_ENV", "")).strip()
+    return f".env.{suffix}" if suffix else ".env"
+
+
 class Settings(BaseSettings):
-    """Конфігурація сервісу. Читається з backend/.env та змінних оточення."""
+    """Конфігурація сервісу. Читається з backend/.env* та змінних оточення."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=env_file_for(),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
     )
+
+    # Порожній рядок = робочий інстанс. Використовується лише для логів,
+    # вибір файлу конфігурації робить env_file_for() ще до створення Settings.
+    app_env: str = ""
 
     telegram_bot_token: str = ""
     telegram_group_chat_id: int | None = None
@@ -57,6 +75,10 @@ class Settings(BaseSettings):
 
     def is_admin(self, telegram_user_id: int) -> bool:
         return telegram_user_id in self.admin_ids
+
+    @property
+    def env_label(self) -> str:
+        return self.app_env or "prod"
 
 
 @lru_cache

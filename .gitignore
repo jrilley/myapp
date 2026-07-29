@@ -13,11 +13,12 @@
 
 # misc
 .DS_Store
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+
+# Усі варіанти .env (.env, .env.test, .env.local, ...) — у них токени ботів.
+# Патерн ".env" сам по собі матчить лише файл з такою назвою, тому саме ".env*".
+.env*
+!.env.example
+!.env.test.example
 
 # backend (Python)
 .venv/

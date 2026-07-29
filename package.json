@@ -19,6 +19,7 @@
   "proxy": "http://localhost:8000",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:test": "node scripts/dev.mjs --test",
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",

@@ -15,8 +15,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const backendDir = path.join(root, 'backend');
 const isWindows = process.platform === 'win32';
 
-const API_PORT = process.env.API_PORT || '8000';
-const WEB_PORT = process.env.PORT || '3000';
+// --test піднімає повністю окремий інстанс: інший бот, інша група, інша БД,
+// інші порти. Робочий бот при цьому може спокійно працювати паралельно.
+const isTest = process.argv.includes('--test');
+const APP_ENV = isTest ? 'test' : '';
+const envFile = isTest ? '.env.test' : '.env';
+
+const API_PORT = process.env.API_PORT || (isTest ? '8001' : '8000');
+const WEB_PORT = process.env.PORT || (isTest ? '3001' : '3000');
 
 const venvBin = path.join(backendDir, '.venv', isWindows ? 'Scripts' : 'bin');
 const uvicorn = path.join(venvBin, isWindows ? 'uvicorn.exe' : 'uvicorn');
@@ -49,10 +55,10 @@ if (!existsSync(reactScripts)) {
     fail('Не встановлені npm-залежності.', isWindows ? 'npm.cmd install' : 'npm install');
 }
 
-if (!existsSync(path.join(backendDir, '.env'))) {
+if (!existsSync(path.join(backendDir, envFile))) {
     console.warn(
-        `${c.yellow}⚠ backend/.env не знайдено — бот не запуститься, працюватиме лише API.${c.reset}\n` +
-        `${c.dim}  Створіть його: cp backend/.env.example backend/.env${c.reset}`
+        `${c.yellow}⚠ backend/${envFile} не знайдено — бот не запуститься, працюватиме лише API.${c.reset}\n` +
+        `${c.dim}  Створіть його з backend/${envFile}.example${c.reset}`
     );
 }
 
@@ -60,14 +66,14 @@ if (!existsSync(path.join(backendDir, '.env'))) {
 const children = [];
 let shuttingDown = false;
 
-const start = (name, color, command, args, cwd) => {
+const start = (name, color, command, args, cwd, extraEnv = {}) => {
     const child = spawn(command, args, {
         cwd,
         // Windows вимагає shell для .cmd/.exe-обгорток. Це cmd.exe, а не
         // PowerShell, тому політика виконання скриптів тут ні до чого.
         shell: isWindows,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: process.env
+        env: { ...process.env, ...extraEnv }
     });
 
     const prefix = `${color}[${name}]${c.reset} `;
@@ -112,11 +118,28 @@ function shutdown(code) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
+const banner = isTest
+    ? `${c.yellow}▸ ТЕСТОВИЙ інстанс${c.reset} ${c.dim}(окремий бот, окрема група, окрема БД)${c.reset}`
+    : `${c.green}▸ РОБОЧИЙ інстанс${c.reset}`;
+
 console.log(
-    `${c.green}▸ API${c.reset}  http://localhost:${API_PORT}  ${c.dim}(докс: /docs)${c.reset}\n` +
+    `${banner}\n` +
+    `${c.green}▸ API${c.reset}  http://localhost:${API_PORT}  ${c.dim}(докс: /docs, конфіг: backend/${envFile})${c.reset}\n` +
     `${c.green}▸ Сайт${c.reset} http://localhost:${WEB_PORT}/applications\n` +
     `${c.dim}Ctrl+C зупиняє обидва процеси.${c.reset}\n`
 );
 
-start('api', c.cyan, uvicorn, ['app.main:app', '--reload', '--port', API_PORT], backendDir);
-start('web', c.green, reactScripts, ['start'], root);
+start(
+    'api', c.cyan, uvicorn,
+    ['app.main:app', '--reload', '--port', API_PORT], backendDir,
+    { APP_ENV }
+);
+start(
+    'web', c.green, reactScripts, ['start'], root,
+    {
+        PORT: WEB_PORT,
+        // Проксі в package.json жорстко вказує на :8000, тому тестовий сайт
+        // має ходити в API за абсолютним URL. api.js читає саме цю змінну.
+        ...(isTest ? { REACT_APP_API_URL: `http://localhost:${API_PORT}/api` } : {})
+    }
+);

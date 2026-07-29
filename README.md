@@ -28,6 +28,44 @@ npm run dev
 Альтернатива — `npm.cmd run dev`, або разово дозволити скрипти:
 `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`.
 
+## Два інстанси: робочий і тестовий
+
+Щоб розробляти й тестувати, не зачіпаючи робочого бота:
+
+| | Робочий | Тестовий |
+|---|---|---|
+| команда | `npm run dev` / `.\dev.cmd` | `npm run dev:test` / `.\dev.cmd --test` |
+| конфіг | `backend/.env` | `backend/.env.test` |
+| бот | робочий | **окремий** бот з @BotFather |
+| група | робоча | окрема тестова |
+| БД | `applications.db` | `applications.test.db` |
+| API / сайт | `:8000` / `:3000` | `:8001` / `:3001` |
+
+Обидва можна тримати запущеними одночасно — вони не перетинаються ніде.
+
+> **Окремий бот обов'язковий.** Telegram дозволяє лише один `getUpdates`-потік
+> на токен. Якщо запустити тестовий інстанс із токеном робочого бота, обидва
+> почнуть отримувати `409 Conflict`, а повідомлення користувачів — випадково
+> діставатись то одному процесу, то іншому. Робочий бот стане непередбачуваним.
+
+Налаштування тестового інстансу:
+
+```bash
+cp backend/.env.test.example backend/.env.test   # вписати токен ДРУГОГО бота
+```
+```powershell
+# Windows: схему для тестової БД треба накотити окремо
+cd backend
+$env:APP_ENV="test"; .venv\Scripts\alembic.exe upgrade head; Remove-Item Env:\APP_ENV
+```
+```bash
+# Unix
+cd backend && APP_ENV=test .venv/bin/alembic upgrade head
+```
+
+При старті в консоль друкується, який саме інстанс піднявся, який конфіг і яка
+БД — щоб не переплутати.
+
 ### Перед першим запуском
 
 ```bash

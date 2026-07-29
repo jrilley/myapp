@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.applications import router as applications_router
 from app.bot.bot import create_bot, create_dispatcher
 from app.bot.publisher import NullPublisher, TelegramPublisher
-from app.config import get_settings
+from app.config import env_file_for, get_settings
 from app.db import SessionFactory
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     bot = None
     polling_task = None
+
+    # Явно друкуємо, який саме інстанс піднявся: переплутати робочого бота
+    # з тестовим — найдорожча помилка в цій схемі.
+    logger.warning(
+        "Інстанс: %s | конфіг: %s | БД: %s | група: %s",
+        settings.env_label,
+        env_file_for(),
+        settings.database_url,
+        settings.telegram_group_chat_id,
+    )
 
     if settings.run_bot and settings.telegram_bot_token:
         bot = create_bot(settings.telegram_bot_token)
