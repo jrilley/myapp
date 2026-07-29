@@ -6,6 +6,7 @@ import { Header } from './Components/Header/Header';
 import { Navigation } from './Components/Navigation/Navigation';
 import { Profile } from './Components/Profile/Profile';
 import { UsersContainer } from './Components/Users/UsersContainer';
+import { ApplicationsContainer } from './Components/Applications/ApplicationsContainer';
 
 
 const App = (props) => {
@@ -18,6 +19,7 @@ const App = (props) => {
           <Route index element={<Profile />} />
           <Route path='dialogs' element={<DialogsContainer />} />
           <Route path='users' element={<UsersContainer />} />
+          <Route path='applications' element={<ApplicationsContainer />} />
         </Routes>
       </div>
     </div>

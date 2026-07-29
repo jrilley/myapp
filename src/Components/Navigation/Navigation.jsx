@@ -24,6 +24,10 @@ const Navigation = () => {
                 to="/users"
                 className={setActive}
           >Users</NavLink></li>
+          <li><NavLink
+                to="/applications"
+                className={setActive}
+          >Заявки</NavLink></li>
           <li><a href="#s">Settings</a></li>
         </ul>
       </nav>

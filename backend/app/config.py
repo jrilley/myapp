@@ -1,0 +1,46 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Конфігурація сервісу. Читається з backend/.env та змінних оточення."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    telegram_bot_token: str = ""
+    telegram_group_chat_id: int | None = None
+    admin_api_token: str = ""
+    database_url: str = "sqlite+aiosqlite:///./applications.db"
+    run_bot: bool = True
+
+    # Списки тримаємо рядками: pydantic-settings за замовчуванням розбирає
+    # складені типи як JSON, і "1,2" з .env впало б із помилкою парсингу.
+    admin_telegram_ids: str = ""
+    cors_origins: str = "http://localhost:3000"
+
+    @property
+    def admin_ids(self) -> set[int]:
+        ids: set[int] = set()
+        for part in self.admin_telegram_ids.split(","):
+            part = part.strip()
+            if part:
+                ids.add(int(part))
+        return ids
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def is_admin(self, telegram_user_id: int) -> bool:
+        return telegram_user_id in self.admin_ids
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

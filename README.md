@@ -1,4 +1,19 @@
-# Getting Started with Create React App
+# myapp
+
+React-застосунок (Create React App) + Telegram-бот із базою даних.
+
+Бот приймає заявки покроковою анкетою, зберігає їх у БД, публікує в Telegram-групу
+і віддає на сайт через REST API — сторінка **[/applications](http://localhost:3000/applications)**.
+
+- Фронтенд — цей каталог (`src/`), запуск: `npm install && npm start`
+- Бот + API — каталог [`backend/`](./backend/README.md), Python + aiogram + FastAPI
+
+Щоб сторінка заявок показувала дані, має бути запущений бекенд — див.
+[backend/README.md](./backend/README.md).
+
+---
+
+## Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
