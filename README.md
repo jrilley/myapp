@@ -5,10 +5,43 @@ React-застосунок (Create React App) + Telegram-бот із базою 
 Бот приймає заявки покроковою анкетою, зберігає їх у БД, публікує в Telegram-групу
 і віддає на сайт через REST API — сторінка **[/applications](http://localhost:3000/applications)**.
 
-- Фронтенд — цей каталог (`src/`), запуск: `npm install && npm start`
+- Фронтенд — цей каталог (`src/`), React + Redux
 - Бот + API — каталог [`backend/`](./backend/README.md), Python + aiogram + FastAPI
 
-Щоб сторінка заявок показувала дані, має бути запущений бекенд — див.
+## Запуск однією командою
+
+```bash
+npm run dev
+```
+
+Піднімає бекенд (API + бот) на `:8000` і сайт на `:3000`, зводить логи обох в
+одну консоль із префіксами `[api]` / `[web]`. `Ctrl+C` зупиняє обидва.
+
+**Windows:** якщо PowerShell блокує `npm` через політику виконання скриптів
+(`npm.ps1 cannot be loaded`), використайте замість цього:
+
+```powershell
+.\dev.cmd
+```
+
+Це той самий запуск, але `.cmd` політиці виконання не підпорядковується.
+Альтернатива — `npm.cmd run dev`, або разово дозволити скрипти:
+`Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`.
+
+### Перед першим запуском
+
+```bash
+npm install
+
+cd backend
+python -m venv .venv                                    # на Unix: python3
+.venv/Scripts/python.exe -m pip install -r requirements.txt   # Unix: .venv/bin/pip install -r requirements.txt
+cp .env.example .env                                    # заповнити токен бота
+.venv/Scripts/alembic.exe upgrade head                  # Unix: .venv/bin/alembic upgrade head
+```
+
+Без `backend/.env` сайт і API працюватимуть, але бот не запуститься — скрипт
+попередить про це. Налаштування токена й групи описані в
 [backend/README.md](./backend/README.md).
 
 ---

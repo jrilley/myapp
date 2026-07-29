@@ -1,5 +1,7 @@
 from functools import lru_cache
+from typing import Any
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +25,22 @@ class Settings(BaseSettings):
     # складені типи як JSON, і "1,2" з .env впало б із помилкою парсингу.
     admin_telegram_ids: str = ""
     cors_origins: str = "http://localhost:3000"
+
+    # .env.example ships with blank values, and copying it must not crash the
+    # app. pydantic would otherwise try to parse "" as int/bool and fail.
+    @field_validator("telegram_group_chat_id", mode="before")
+    @classmethod
+    def _blank_to_none(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("run_bot", mode="before")
+    @classmethod
+    def _blank_to_true(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return True
+        return value
 
     @property
     def admin_ids(self) -> set[int]:

@@ -17,6 +17,12 @@ SQLite має один writer, і два окремі процеси регул�
 
 ## Запуск
 
+Найпростіше — однією командою з кореня репозиторію: `npm run dev`
+(на Windows `.\dev.cmd`). Вона піднімає і бекенд, і сайт; див.
+[README у корені](../README.md).
+
+Окремо тільки бекенд:
+
 ```bash
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
@@ -27,12 +33,14 @@ alembic upgrade head      # створити/оновити схему
 uvicorn app.main:app --reload --port 8000
 ```
 
-Фронтенд (в іншому терміналі, з кореня репозиторію):
+На Windows активація venv інша — `.venv\Scripts\Activate.ps1`, а якщо
+PowerShell блокує скрипти, простіше звертатись напряму:
+`.venv\Scripts\uvicorn.exe app.main:app --reload --port 8000`.
 
-```bash
-npm install
-npm start                 # http://localhost:3000/applications
-```
+> **Файли конфігурації тримайте в ASCII.** `alembic.ini` Alembic читає в
+> *локальному* кодуванні (на Windows це зазвичай cp1251/cp1252), тому
+> кирилиця в ньому валить `alembic` з `UnicodeDecodeError`. На `.env` це не
+> поширюється — його читаємо явно як UTF-8.
 
 У dev запити йдуть через `"proxy": "http://localhost:8000"` у `package.json`,
 тому CORS не потрібен. Для продакшн-збірки задайте `REACT_APP_API_URL`.
