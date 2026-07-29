@@ -40,6 +40,11 @@ const Applications = (props) => {
                         </span>
                     </div>
                     <div className={styles.name}>{a.full_name}</div>
+                    {a.contact &&
+                        <div className={styles.contact}>
+                            <span className={styles.contactLabel}>Контакт:</span> {a.contact}
+                        </div>
+                    }
                     <div className={styles.description}>{a.description}</div>
                 </div>
             )}

@@ -4,8 +4,8 @@ from app.models import Application
 
 
 def format_for_group(application: Application) -> str:
-    """Повідомлення для групи. Контакт тут є навмисно — група вважається
-    внутрішньою. Публічний API контакт не віддає (див. schemas.ApplicationPublic)."""
+    """Повідомлення для групи. Контакт тут є — так само, як і в публічному
+    API та на сайті (див. schemas.ApplicationPublic)."""
     return (
         f"🆕 <b>Заявка #{application.id}</b>\n\n"
         f"<b>Категорія:</b> {escape(application.category)}\n"

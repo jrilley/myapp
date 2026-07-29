@@ -36,15 +36,23 @@ async def test_list_returns_created_application(client, session):
     assert body["items"][0]["status"] == "published"
 
 
-async def test_public_schema_hides_contact(client, session):
-    """Контакт — персональні дані, у відкритий API він потрапляти не має."""
+async def test_public_schema_exposes_contact(client, session):
+    """Контакт публічний — свідоме рішення: заявка без способу зв'язку марна."""
     await _make(session)
 
     body = (await client.get("/api/applications")).json()
 
-    item = body["items"][0]
-    assert "contact" not in item
-    assert "telegram_user_id" not in item
+    assert body["items"][0]["contact"] == "+380000000000"
+
+
+async def test_public_schema_hides_internal_fields(client, session):
+    """Внутрішня механіка публікації сайту не потрібна й назовні не йде."""
+    await _make(session)
+
+    item = (await client.get("/api/applications")).json()["items"][0]
+
+    for field in ("telegram_user_id", "group_chat_id", "group_message_id", "deleted_at"):
+        assert field not in item
 
 
 async def test_admin_endpoint_exposes_contact(client, session):

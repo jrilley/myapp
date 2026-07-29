@@ -43,6 +43,17 @@
     margin-bottom: 6px;
 }
 
+.contact {
+    color: #444;
+    font-size: 14px;
+    margin-bottom: 6px;
+    word-break: break-word;
+}
+
+.contactLabel {
+    color: #888;
+}
+
 .description {
     color: #444;
     font-weight: 400;

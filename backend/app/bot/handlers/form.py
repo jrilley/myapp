@@ -44,7 +44,11 @@ async def step_full_name(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(full_name=value)
     await state.set_state(ApplicationForm.contact)
-    await message.answer("Залиште контакт для зв'язку (телефон, email або @username).")
+    await message.answer(
+        "Залиште контакт для зв'язку (телефон, email або @username).\n\n"
+        "⚠️ <i>Увага: цей контакт буде видно публічно — і в групі, "
+        "і на сайті. Вказуйте те, що готові показати всім.</i>"
+    )
 
 
 @router.message(ApplicationForm.contact, F.text)
@@ -100,7 +104,8 @@ async def step_description(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await message.answer(
         f"{format_summary(data)}\n\n"
-        "<i>Заявку буде опубліковано. Контакт бачать лише адміністратори.</i>",
+        "<i>Заявку буде опубліковано в групі та на сайті разом із контактом — "
+        "він буде доступний публічно.</i>",
         reply_markup=confirm_keyboard(),
     )
 

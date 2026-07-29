@@ -8,15 +8,21 @@ from app.models import ApplicationStatus
 class ApplicationPublic(BaseModel):
     """Схема для публічного сайту.
 
-    Свідомо БЕЗ `contact` і `telegram_user_id`: анкета містить особистий
-    контакт людини, і віддавати його у відкритий API означало б віддати
-    телефони в пошукові індекси. Повні дані — лише через /api/admin/*.
+    `contact` віддається публічно — це свідоме рішення замовника: заявка без
+    способу зв'язатися з автором на сайті марна. Бот попереджає користувача
+    про це на кроці анкети й перед підтвердженням (див. bot/handlers/form.py),
+    щоб контакт залишався усвідомлено.
+
+    Внутрішні поля (`telegram_user_id`, `group_*`, `deleted_at`) сюди НЕ
+    входять: вони не потрібні сайту й дають зайву інформацію про механіку
+    публікації. Вони лишаються в ApplicationAdmin.
     """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     full_name: str
+    contact: str
     category: str
     description: str
     status: ApplicationStatus
@@ -28,7 +34,6 @@ class ApplicationAdmin(ApplicationPublic):
 
     telegram_user_id: int
     telegram_username: str | None
-    contact: str
     group_chat_id: int | None
     group_message_id: int | None
     updated_at: datetime
