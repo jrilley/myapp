@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import styles from './Users.module.css';
 import avatar from './../Profile/images/ava.jpg';
 import * as axios from 'axios';
