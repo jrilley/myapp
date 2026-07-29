@@ -1,0 +1,3 @@
+# Залежності лише для генерації документації (scripts/make_schema_pdf.py).
+# Навмисно окремо від backend/requirements.txt — застосунку вони не потрібні.
+reportlab~=5.0
