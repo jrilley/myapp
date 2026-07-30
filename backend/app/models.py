@@ -21,45 +21,92 @@ class ApplicationStatus(str, enum.Enum):
 
 
 class Application(Base):
+    """Заявка, надіслана через Telegram-бота.
+
+    Описи полів живуть у `doc=` і звідти потрапляють у docs/schema.json
+    (scripts/dump_schema.py). `doc` — метадані рівня Python: у DDL вони не
+    йдуть, тож на міграції не впливають.
+    """
+
     __tablename__ = "applications"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        doc="Номер заявки. Його бачить користувач у «#N» і передає в /delete.",
+    )
 
-    # BigInteger обов'язково: Telegram user id не вміщується в int32.
-    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
-    telegram_username: Mapped[str | None] = mapped_column(String(64))
+    telegram_user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        index=True,
+        doc="Автор заявки. BigInteger обов'язково: Telegram id не вміщується в int32.",
+    )
+    telegram_username: Mapped[str | None] = mapped_column(
+        String(64),
+        doc="@username автора, якщо він є — у Telegram він не обов'язковий.",
+    )
 
-    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    contact: Mapped[str] = mapped_column(String(200), nullable=False)
-    category: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    full_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, doc="Крок 1 анкети: ПІБ."
+    )
+    contact: Mapped[str] = mapped_column(
+        String(200),
+        nullable=False,
+        doc="Крок 2 анкети. Публічний за рішенням замовника — бот попереджає.",
+    )
+    category: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+        doc="Крок 3 анкети, значення з фіксованого списку app/bot/constants.py.",
+    )
+    description: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        doc="Крок 4 анкети. Text, а не String: довжину обмежує бот, не схема.",
+    )
 
     status: Mapped[ApplicationStatus] = mapped_column(
         Enum(ApplicationStatus, native_enum=False, length=16),
         nullable=False,
         default=ApplicationStatus.published,
         index=True,
+        doc="Модерації немає, тому при створенні завжди published.",
     )
 
-    # Зберігаємо координати опублікованого повідомлення, щоб потім
-    # прибрати його з групи разом із видаленням заявки.
-    group_chat_id: Mapped[int | None] = mapped_column(BigInteger)
-    group_message_id: Mapped[int | None] = mapped_column(Integer)
+    group_chat_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        doc="Куди опубліковано. Порожнє, якщо публікація не вдалася.",
+    )
+    group_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="Без нього неможливо прибрати повідомлення з групи при видаленні.",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        doc="Проставляє БД. За ним сортується список на сайті.",
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+        doc="Оновлюється автоматично при кожній зміні рядка.",
     )
-    # Soft delete: заявки — це персональні дані й історія звернень,
-    # безповоротне стирання однією командою в чаті надто легко зробити помилково.
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        doc=(
+            "Мітка м'якого видалення; NULL = заявка жива. Рядок не стирається: "
+            "заявки — персональні дані й історія звернень."
+        ),
+    )
 
     __table_args__ = (
+        # Під основний запит сайту: живі заявки, новіші вгорі.
         Index("ix_applications_visible", "deleted_at", "created_at"),
     )
 

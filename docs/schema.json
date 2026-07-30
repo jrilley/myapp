@@ -1,0 +1,304 @@
+{
+  "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
+  "source": "backend/app/models.py",
+  "alembic_head": "5c6dd5b62690",
+  "default_database_url": "sqlite+aiosqlite:///./applications.db",
+  "enums": {
+    "ApplicationStatus": {
+      "values": [
+        "pending",
+        "published",
+        "rejected",
+        "deleted"
+      ],
+      "default": "published",
+      "description": "Модерації немає — при створенні завжди published. pending і rejected закладені наперед, щоб увімкнути модерацію без міграції."
+    }
+  },
+  "tables": {
+    "applications": {
+      "description": "Заявка, надіслана через Telegram-бота.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Номер заявки. Його бачить користувач у «#N» і передає в /delete."
+        },
+        {
+          "name": "telegram_user_id",
+          "type": {
+            "generic": "BIGINT",
+            "sqlite": "BIGINT",
+            "postgresql": "BIGINT"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Автор заявки. BigInteger обов'язково: Telegram id не вміщується в int32."
+        },
+        {
+          "name": "telegram_username",
+          "type": {
+            "generic": "VARCHAR(64)",
+            "sqlite": "VARCHAR(64)",
+            "postgresql": "VARCHAR(64)"
+          },
+          "python_type": "str",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "@username автора, якщо він є — у Telegram він не обов'язковий."
+        },
+        {
+          "name": "full_name",
+          "type": {
+            "generic": "VARCHAR(200)",
+            "sqlite": "VARCHAR(200)",
+            "postgresql": "VARCHAR(200)"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Крок 1 анкети: ПІБ."
+        },
+        {
+          "name": "contact",
+          "type": {
+            "generic": "VARCHAR(200)",
+            "sqlite": "VARCHAR(200)",
+            "postgresql": "VARCHAR(200)"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Крок 2 анкети. Публічний за рішенням замовника — бот попереджає."
+        },
+        {
+          "name": "category",
+          "type": {
+            "generic": "VARCHAR(64)",
+            "sqlite": "VARCHAR(64)",
+            "postgresql": "VARCHAR(64)"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Крок 3 анкети, значення з фіксованого списку app/bot/constants.py."
+        },
+        {
+          "name": "description",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Крок 4 анкети. Text, а не String: довжину обмежує бот, не схема."
+        },
+        {
+          "name": "status",
+          "type": {
+            "generic": "VARCHAR(16)",
+            "sqlite": "VARCHAR(16)",
+            "postgresql": "VARCHAR(16)"
+          },
+          "python_type": "ApplicationStatus",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": "published",
+          "server_default": null,
+          "on_update": null,
+          "description": "Модерації немає, тому при створенні завжди published.",
+          "enum_values": [
+            "pending",
+            "published",
+            "rejected",
+            "deleted"
+          ]
+        },
+        {
+          "name": "group_chat_id",
+          "type": {
+            "generic": "BIGINT",
+            "sqlite": "BIGINT",
+            "postgresql": "BIGINT"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Куди опубліковано. Порожнє, якщо публікація не вдалася."
+        },
+        {
+          "name": "group_message_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Без нього неможливо прибрати повідомлення з групи при видаленні."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "generic": "DATETIME",
+            "sqlite": "DATETIME",
+            "postgresql": "TIMESTAMP WITH TIME ZONE"
+          },
+          "python_type": "datetime",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": "now()",
+          "on_update": null,
+          "description": "Проставляє БД. За ним сортується список на сайті."
+        },
+        {
+          "name": "updated_at",
+          "type": {
+            "generic": "DATETIME",
+            "sqlite": "DATETIME",
+            "postgresql": "TIMESTAMP WITH TIME ZONE"
+          },
+          "python_type": "datetime",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": "now()",
+          "on_update": "now()",
+          "description": "Оновлюється автоматично при кожній зміні рядка."
+        },
+        {
+          "name": "deleted_at",
+          "type": {
+            "generic": "DATETIME",
+            "sqlite": "DATETIME",
+            "postgresql": "TIMESTAMP WITH TIME ZONE"
+          },
+          "python_type": "datetime",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "description": "Мітка м'якого видалення; NULL = заявка жива. Рядок не стирається: заявки — персональні дані й історія звернень."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ix_applications_category",
+          "columns": [
+            "category"
+          ],
+          "unique": false
+        },
+        {
+          "name": "ix_applications_status",
+          "columns": [
+            "status"
+          ],
+          "unique": false
+        },
+        {
+          "name": "ix_applications_telegram_user_id",
+          "columns": [
+            "telegram_user_id"
+          ],
+          "unique": false
+        },
+        {
+          "name": "ix_applications_visible",
+          "columns": [
+            "deleted_at",
+            "created_at"
+          ],
+          "unique": false
+        }
+      ]
+    }
+  },
+  "managed_by_alembic": {
+    "$comment": "Крім таблиць вище, у файлі БД є службова таблиця Alembic. Вона не описана в моделях і не належить застосунку.",
+    "alembic_version": {
+      "columns": [
+        "version_num VARCHAR(32) NOT NULL PRIMARY KEY"
+      ],
+      "purpose": "Зберігає номер накоченої ревізії міграцій."
+    }
+  },
+  "api_exposure": {
+    "$comment": "Які колонки віддає REST API. Виведено з app/schemas.py.",
+    "applications": {
+      "public": [
+        "id",
+        "full_name",
+        "contact",
+        "category",
+        "description",
+        "status",
+        "created_at"
+      ],
+      "admin_only": [
+        "telegram_user_id",
+        "telegram_username",
+        "group_chat_id",
+        "group_message_id",
+        "updated_at",
+        "deleted_at"
+      ]
+    }
+  }
+}

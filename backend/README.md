@@ -162,6 +162,27 @@ PowerShell блокує скрипти, простіше звертатись н
 `status=ApplicationStatus.pending` у `repository.create_application`
 (виклик — у `app/bot/handlers/form.py`) і додати адмінські кнопки схвалення.
 
+## Структура БД
+
+Повна структура — [`docs/schema.json`](../docs/schema.json): таблиці, колонки з
+типами під SQLite і PostgreSQL, nullable, індекси, значення enum, ревізія
+Alembic і те, які колонки віддає публічний API.
+
+Файл **генерується**, а не пишеться руками:
+
+```bash
+python scripts/dump_schema.py           # перегенерувати
+python scripts/dump_schema.py --check   # чи не відстав від моделі
+```
+
+Джерело — `app/models.py`; описи колонок беруться з `doc=` у самій моделі,
+а перелік публічних полів виводиться з `app/schemas.py`. Тому документація
+не може розійтися з кодом. `doc=` — метадані рівня Python, у DDL вони не
+йдуть і міграцій не створюють (перевірено `alembic check`).
+
+Після зміни моделі: `alembic revision --autogenerate` → `alembic upgrade head`
+→ `python scripts/dump_schema.py`.
+
 ## Тести
 
 ```bash
