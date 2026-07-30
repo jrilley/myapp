@@ -27,6 +27,7 @@ from app.bot.keyboards import (
 )
 from app.bot.publisher import Publisher
 from app.bot.states import ApplicationForm
+from app.config import Settings
 
 router = Router(name="form")
 
@@ -53,13 +54,18 @@ async def on_menu_new(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == FORM_CANCEL)
-async def on_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+async def on_cancel(
+    callback: CallbackQuery, state: FSMContext, settings: Settings
+) -> None:
     """Без фільтра стану: «Скасувати» має спрацьовувати з будь-якого кроку."""
     await state.clear()
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            "Заповнення скасовано.", reply_markup=main_menu_keyboard()
+            "Заповнення скасовано.",
+            reply_markup=main_menu_keyboard(
+                is_admin=settings.is_admin(callback.from_user.id)
+            ),
         )
 
 
@@ -182,12 +188,17 @@ async def step_confirm(
 
 
 @router.callback_query(ApplicationForm.confirm, F.data == CONFIRM_NO)
-async def step_reject(callback: CallbackQuery, state: FSMContext) -> None:
+async def step_reject(
+    callback: CallbackQuery, state: FSMContext, settings: Settings
+) -> None:
     await state.clear()
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            "Заявку не надіслано.", reply_markup=main_menu_keyboard()
+            "Заявку не надіслано.",
+            reply_markup=main_menu_keyboard(
+                is_admin=settings.is_admin(callback.from_user.id)
+            ),
         )
 
 

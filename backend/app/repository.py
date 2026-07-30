@@ -92,6 +92,16 @@ async def list_user_applications(
     return list(await session.scalars(stmt))
 
 
+async def count_by_status(session: AsyncSession) -> dict[ApplicationStatus, int]:
+    """Скільки заявок у кожному статусі, включно з видаленими."""
+    stmt = select(Application.status, func.count()).group_by(Application.status)
+    rows = await session.execute(stmt)
+    counts = {status: 0 for status in ApplicationStatus}
+    for status, total in rows:
+        counts[status] = int(total)
+    return counts
+
+
 async def set_group_message(
     session: AsyncSession, application: Application, *, chat_id: int, message_id: int
 ) -> Application:

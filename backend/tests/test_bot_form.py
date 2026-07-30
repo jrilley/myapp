@@ -111,19 +111,19 @@ async def test_unknown_category_does_not_advance(state):
     assert callback.answered == ["Невідома категорія"]
 
 
-async def test_cancel_clears_state(state):
+async def test_cancel_clears_state(state, settings):
     await cmd_new(FakeMessage(), state)
     await step_full_name(FakeMessage("Іван Петренко"), state)
 
-    await cmd_cancel(FakeMessage(), state)
+    await cmd_cancel(FakeMessage(), state, settings)
 
     assert await state.get_state() is None
 
 
-async def test_reject_on_confirm_saves_nothing(state, session):
+async def test_reject_on_confirm_saves_nothing(state, session, settings):
     await _fill_until_confirm(state)
 
-    await step_reject(FakeCallback("confirm:no"), state)
+    await step_reject(FakeCallback("confirm:no"), state, settings)
 
     _, total = await repository.list_applications(session)
     assert total == 0

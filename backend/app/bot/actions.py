@@ -8,10 +8,13 @@ from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.formatting import format_own_application
-from app.bot.keyboards import back_to_menu_keyboard, own_applications_keyboard
+from app.bot.formatting import format_admin_application, format_own_application
+from app.bot.keyboards import applications_keyboard, back_to_menu_keyboard
 from app.bot.publisher import Publisher
 from app.config import Settings
+from app.models import ApplicationStatus
+
+ADMIN_LIST_LIMIT = 10
 
 
 async def delete_application(
@@ -53,4 +56,40 @@ async def render_own_applications(
         return "У вас поки немає заявок.", back_to_menu_keyboard()
 
     body = "\n\n".join(format_own_application(a) for a in applications)
-    return f"<b>Ваші заявки:</b>\n\n{body}", own_applications_keyboard(applications)
+    return f"<b>Ваші заявки:</b>\n\n{body}", applications_keyboard(applications)
+
+
+async def render_all_applications(
+    session: AsyncSession,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Адмінський список: заявки всіх користувачів, найновіші зверху."""
+    applications, total = await repository.list_applications(
+        session, limit=ADMIN_LIST_LIMIT
+    )
+    if not applications:
+        return "Заявок поки немає.", back_to_menu_keyboard()
+
+    shown = len(applications)
+    header = f"<b>Усі заявки</b> — показано {shown} з {total}"
+    body = "\n\n".join(format_admin_application(a) for a in applications)
+    return f"{header}\n\n{body}", applications_keyboard(applications)
+
+
+async def render_stats(session: AsyncSession) -> tuple[str, InlineKeyboardMarkup]:
+    """Адмінська статистика по статусах."""
+    counts = await repository.count_by_status(session)
+    live = counts[ApplicationStatus.published] + counts[ApplicationStatus.pending]
+
+    lines = [
+        "<b>Статистика</b>",
+        "",
+        f"Активних: <b>{live}</b>",
+        f"  опубліковано: {counts[ApplicationStatus.published]}",
+        f"  очікують модерації: {counts[ApplicationStatus.pending]}",
+        "",
+        f"Видалених: {counts[ApplicationStatus.deleted]}",
+        f"Відхилених: {counts[ApplicationStatus.rejected]}",
+        "",
+        f"Усього рядків у базі: {sum(counts.values())}",
+    ]
+    return "\n".join(lines), back_to_menu_keyboard()

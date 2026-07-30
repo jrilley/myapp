@@ -14,16 +14,27 @@ MENU_NEW = "menu:new"
 MENU_MY = "menu:my"
 MENU_HELP = "menu:help"
 MENU_BACK = "menu:back"
+MENU_ALL = "menu:all"
+MENU_STATS = "menu:stats"
 
 FORM_CANCEL = "form:cancel"
 DELETE_PREFIX = "del"
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Головне меню. Команди лишаються робочими, але вводити їх не потрібно."""
+def main_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
+    """Головне меню. Склад залежить від того, чи є користувач у
+    ADMIN_TELEGRAM_IDS: адмін додатково бачить усі заявки й статистику.
+
+    Приховування кнопки — це лише зручність, не захист: callback_data можна
+    переслати або підробити. Тому кожен адмінський хендлер перевіряє права
+    самостійно (див. app/bot/handlers/common.py).
+    """
     builder = InlineKeyboardBuilder()
     builder.button(text="📝 Нова заявка", callback_data=MENU_NEW)
     builder.button(text="📋 Мої заявки", callback_data=MENU_MY)
+    if is_admin:
+        builder.button(text="🗂 Усі заявки", callback_data=MENU_ALL)
+        builder.button(text="📊 Статистика", callback_data=MENU_STATS)
     builder.button(text="ℹ️ Довідка", callback_data=MENU_HELP)
     builder.adjust(1)
     return builder.as_markup()
@@ -63,11 +74,12 @@ def after_submit_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def own_applications_keyboard(
+def applications_keyboard(
     applications: Sequence[Application],
 ) -> InlineKeyboardMarkup:
     """Кнопка видалення на кожну заявку — замість того, щоб набирати
-    /delete з номером вручну."""
+    /delete з номером вручну. Використовується і для своїх заявок,
+    і для адмінського списку всіх."""
     builder = InlineKeyboardBuilder()
     for application in applications:
         builder.button(
