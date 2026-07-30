@@ -24,38 +24,14 @@ from app.bot.handlers.form import (
     step_reject,
 )
 from app.bot.states import ApplicationForm
-
-OWNER_ID = 1001
-ADMIN_ID = 777
-STRANGER_ID = 2002
-
-
-class FakeUser:
-    def __init__(self, user_id: int = OWNER_ID, username: str | None = "tester"):
-        self.id = user_id
-        self.username = username
-
-
-class FakeMessage:
-    def __init__(self, text: str | None = None, user: FakeUser | None = None):
-        self.text = text
-        self.from_user = user or FakeUser()
-        self.answers: list[str] = []
-
-    async def answer(self, text: str, **_kwargs) -> "FakeMessage":
-        self.answers.append(text)
-        return self
-
-
-class FakeCallback:
-    def __init__(self, data: str, user: FakeUser | None = None):
-        self.data = data
-        self.from_user = user or FakeUser()
-        self.message = FakeMessage(user=user)
-        self.answered: list[str | None] = []
-
-    async def answer(self, text: str | None = None, **_kwargs) -> None:
-        self.answered.append(text)
+from tests.conftest import (
+    ADMIN_ID,
+    OWNER_ID,
+    STRANGER_ID,
+    FakeCallback,
+    FakeMessage,
+    FakeUser,
+)
 
 
 @pytest.fixture

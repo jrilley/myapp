@@ -11,6 +11,56 @@ from app.models import Application
 
 TEST_ADMIN_TOKEN = "test-admin-token"
 
+OWNER_ID = 1001
+ADMIN_ID = 777
+STRANGER_ID = 2002
+
+
+class FakeUser:
+    def __init__(self, user_id: int = OWNER_ID, username: str | None = "tester"):
+        self.id = user_id
+        self.username = username
+
+
+class FakeMessage:
+    """Мінімальний двійник aiogram.types.Message — рівно ті методи,
+    які викликають хендлери."""
+
+    def __init__(self, text: str | None = None, user: FakeUser | None = None):
+        self.text = text
+        self.from_user = user or FakeUser()
+        self.answers: list[str] = []
+        self.edits: list[str] = []
+        self.markups: list[object] = []
+
+    async def answer(self, text: str, reply_markup=None, **_kwargs) -> "FakeMessage":
+        self.answers.append(text)
+        self.markups.append(reply_markup)
+        return self
+
+    async def edit_text(self, text: str, reply_markup=None, **_kwargs) -> "FakeMessage":
+        self.edits.append(text)
+        self.markups.append(reply_markup)
+        return self
+
+
+class FakeCallback:
+    def __init__(self, data: str, user: FakeUser | None = None):
+        self.data = data
+        self.from_user = user or FakeUser()
+        self.message = FakeMessage(user=user)
+        self.answered: list[str | None] = []
+
+    async def answer(self, text: str | None = None, **_kwargs) -> None:
+        self.answered.append(text)
+
+
+def callback_data(markup) -> list[str]:
+    """Плоский список callback_data з inline-клавіатури."""
+    if markup is None:
+        return []
+    return [b.callback_data for row in markup.inline_keyboard for b in row]
+
 
 class FakePublisher:
     """Підміна TelegramPublisher — тести не мають ходити в мережу."""

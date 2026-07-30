@@ -17,20 +17,50 @@ from app.bot.keyboards import (
     CATEGORY_PREFIX,
     CONFIRM_NO,
     CONFIRM_YES,
+    FORM_CANCEL,
+    MENU_NEW,
+    after_submit_keyboard,
+    cancel_keyboard,
     categories_keyboard,
     confirm_keyboard,
+    main_menu_keyboard,
 )
 from app.bot.publisher import Publisher
 from app.bot.states import ApplicationForm
 
 router = Router(name="form")
 
+FIRST_QUESTION = "Як вас звати? (ПІБ)"
+
+
+async def _start_form(state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(ApplicationForm.full_name)
+
 
 @router.message(Command("new"))
 async def cmd_new(message: Message, state: FSMContext) -> None:
+    await _start_form(state)
+    await message.answer(FIRST_QUESTION, reply_markup=cancel_keyboard())
+
+
+@router.callback_query(F.data == MENU_NEW)
+async def on_menu_new(callback: CallbackQuery, state: FSMContext) -> None:
+    await _start_form(state)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(FIRST_QUESTION, reply_markup=cancel_keyboard())
+
+
+@router.callback_query(F.data == FORM_CANCEL)
+async def on_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """Без фільтра стану: «Скасувати» має спрацьовувати з будь-якого кроку."""
     await state.clear()
-    await state.set_state(ApplicationForm.full_name)
-    await message.answer("Як вас звати? (ПІБ)")
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Заповнення скасовано.", reply_markup=main_menu_keyboard()
+        )
 
 
 @router.message(ApplicationForm.full_name, F.text)
@@ -39,7 +69,8 @@ async def step_full_name(message: Message, state: FSMContext) -> None:
     if not 2 <= len(value) <= MAX_FULL_NAME:
         # Лишаємось у тому самому стані — попередні відповіді не втрачаються.
         await message.answer(
-            f"Ім'я має бути від 2 до {MAX_FULL_NAME} символів. Спробуйте ще раз."
+            f"Ім'я має бути від 2 до {MAX_FULL_NAME} символів. Спробуйте ще раз.",
+            reply_markup=cancel_keyboard(),
         )
         return
     await state.update_data(full_name=value)
@@ -47,7 +78,8 @@ async def step_full_name(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Залиште контакт для зв'язку (телефон, email або @username).\n\n"
         "⚠️ <i>Увага: цей контакт буде видно публічно — і в групі, "
-        "і на сайті. Вказуйте те, що готові показати всім.</i>"
+        "і на сайті. Вказуйте те, що готові показати всім.</i>",
+        reply_markup=cancel_keyboard(),
     )
 
 
@@ -56,7 +88,8 @@ async def step_contact(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     if not 3 <= len(value) <= MAX_CONTACT:
         await message.answer(
-            f"Контакт має бути від 3 до {MAX_CONTACT} символів. Спробуйте ще раз."
+            f"Контакт має бути від 3 до {MAX_CONTACT} символів. Спробуйте ще раз.",
+            reply_markup=cancel_keyboard(),
         )
         return
     await state.update_data(contact=value)
@@ -79,7 +112,8 @@ async def step_category(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message is not None:
         await callback.message.answer(
             f"Категорія: {category}.\nТепер опишіть суть заявки "
-            f"({MIN_DESCRIPTION}–{MAX_DESCRIPTION} символів)."
+            f"({MIN_DESCRIPTION}–{MAX_DESCRIPTION} символів).",
+            reply_markup=cancel_keyboard(),
         )
 
 
@@ -96,7 +130,8 @@ async def step_description(message: Message, state: FSMContext) -> None:
     if not MIN_DESCRIPTION <= len(value) <= MAX_DESCRIPTION:
         await message.answer(
             f"Опис має бути від {MIN_DESCRIPTION} до {MAX_DESCRIPTION} символів. "
-            "Спробуйте ще раз."
+            "Спробуйте ще раз.",
+            reply_markup=cancel_keyboard(),
         )
         return
     await state.update_data(description=value)
@@ -141,7 +176,8 @@ async def step_confirm(
 
     if callback.message is not None:
         await callback.message.answer(
-            f"✅ Заявку #{application.id} прийнято. /my — переглянути свої заявки."
+            f"✅ Заявку #{application.id} прийнято.",
+            reply_markup=after_submit_keyboard(),
         )
 
 
@@ -150,11 +186,15 @@ async def step_reject(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("Заявку не надіслано. /new — почати спочатку.")
+        await callback.message.answer(
+            "Заявку не надіслано.", reply_markup=main_menu_keyboard()
+        )
 
 
 @router.message(ApplicationForm.full_name)
 @router.message(ApplicationForm.contact)
 @router.message(ApplicationForm.description)
 async def step_non_text(message: Message) -> None:
-    await message.answer("Надішліть, будь ласка, текст.")
+    await message.answer(
+        "Надішліть, будь ласка, текст.", reply_markup=cancel_keyboard()
+    )

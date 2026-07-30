@@ -194,13 +194,23 @@ class Sheet:
 # --------------------------------------------------------------------------
 # Дані схеми — тримаємо поруч зі структурою файлу, щоб оновлювати в одному місці
 # --------------------------------------------------------------------------
+# Без емодзі: в Arial цих гліфів немає, у PDF вони виходять порожніми
+# квадратами. У самому боті кнопки, звісно, з піктограмами.
+MENU_BUTTONS = [
+    ("«Нова заявка»", "усі", "Починає анкету з першого кроку."),
+    ("«Мої заявки»", "усі", "Свої заявки, до 10, у кожної кнопка видалення."),
+    ("«Довідка»", "усі", "Довідка й повернення в меню."),
+    ("«Скасувати»", "усі", "Під кожним кроком анкети — вихід в одне натискання."),
+    ("«Видалити #N»", "автор або адмін", "Видаляє заявку і перемальовує список на місці."),
+]
+
 COMMANDS = [
-    ("/start", "усі", "Вітання й довідка. Скидає незавершену анкету."),
-    ("/help", "усі", "Список команд."),
-    ("/new", "усі", "Починає анкету з першого кроку."),
-    ("/cancel", "усі", "Перериває заповнення на будь-якому кроці."),
-    ("/my", "усі", "Заявки лише цього користувача, до 10, новіші вгорі."),
-    ("/delete <id>", "автор або адмін", "М'яке видалення + спроба прибрати з групи."),
+    ("/start", "Меню"),
+    ("/new", "Нова заявка"),
+    ("/my", "Мої заявки"),
+    ("/cancel", "Перервати"),
+    ("/help", "Довідка"),
+    ("/delete <id>", "Видалити заявку"),
 ]
 
 STEPS = [
@@ -364,18 +374,31 @@ def page_route(s: Sheet) -> None:
     panel_top = 440
     left_w, right_w = 520, 590
 
-    ty2 = s.section(M, panel_top, left_w, "що вміє бот")
-    s.text(M, ty2 + 8, "Команда", font="Mono-Bold", size=7, color=SLATE)
-    s.text(M + 118, ty2 + 8, "Хто", font="Mono-Bold", size=7, color=SLATE)
-    s.text(M + 222, ty2 + 8, "Дія", font="Mono-Bold", size=7, color=SLATE)
+    ty2 = s.section(M, panel_top, left_w, "керування: inline-кнопки")
+    s.text(M, ty2 + 8, "Кнопка", font="Mono-Bold", size=7, color=SLATE)
+    s.text(M + 138, ty2 + 8, "Хто", font="Mono-Bold", size=7, color=SLATE)
+    s.text(M + 242, ty2 + 8, "Дія", font="Mono-Bold", size=7, color=SLATE)
     row = ty2 + 14
-    for cmd, who, what in COMMANDS:
+    for button, who, what in MENU_BUTTONS:
         s.line(M, row, M + left_w, row, color=LINE_SOFT, width=0.6)
-        s.text(M, row + 15, cmd, font="Mono-Bold", size=8.5, color=INK)
-        s.text(M + 118, row + 15, who, font="Sans", size=8, color=SLATE)
-        end = s.wrap(M + 222, row + 15, left_w - 222, what, size=8, leading=10, color=INK)
+        s.text(M, row + 15, button, font="Sans-Bold", size=8.5, color=INK)
+        s.text(M + 138, row + 15, who, font="Sans", size=8, color=SLATE)
+        end = s.wrap(M + 242, row + 15, left_w - 242, what, size=8, leading=10, color=INK)
         row = max(row + 26, end + 5)
     s.line(M, row, M + left_w, row, color=LINE_SOFT, width=0.6)
+
+    s.wrap(M, row + 18, left_w,
+           "Команди лишаються робочими й показані в меню команд клієнта Telegram, "
+           "але вводити їх не потрібно — весь шлях проходиться натисканнями:",
+           size=8, leading=10.5)
+    cx, cy = M, row + 46
+    for cmd, label in COMMANDS:
+        w = pdfmetrics.stringWidth(f"{cmd} — {label}", "Mono", 7) + 14
+        if cx + w > M + left_w:
+            cx, cy = M, cy + 20
+        s.box(cx, cy, w, 15, fill=PANEL_ALT, stroke=LINE_SOFT)
+        s.text(cx + 7, cy + 11, f"{cmd} — {label}", font="Mono", size=7, color=SLATE)
+        cx += w + 6
 
     x_right = M + left_w + 40
     ty3 = s.section(x_right, panel_top, right_w, "анкета: 5 станів fsm")

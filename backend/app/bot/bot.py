@@ -1,7 +1,11 @@
+import logging
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot.handlers import build_router
@@ -9,9 +13,29 @@ from app.bot.middlewares import DbSessionMiddleware
 from app.bot.publisher import Publisher
 from app.config import Settings
 
+logger = logging.getLogger(__name__)
+
+# Список для кнопки ☰ у клієнті Telegram. Основна навігація — inline-кнопки,
+# але так команди теж можна вибрати зі списку, а не набирати вручну.
+BOT_COMMANDS = [
+    BotCommand(command="start", description="Головне меню"),
+    BotCommand(command="new", description="Нова заявка"),
+    BotCommand(command="my", description="Мої заявки"),
+    BotCommand(command="cancel", description="Перервати заповнення"),
+    BotCommand(command="help", description="Довідка"),
+]
+
 
 def create_bot(token: str) -> Bot:
     return Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+
+
+async def setup_bot_commands(bot: Bot) -> None:
+    try:
+        await bot.set_my_commands(BOT_COMMANDS)
+    except TelegramAPIError:
+        # Не критично: бот працює й без списку команд.
+        logger.exception("Не вдалося встановити список команд")
 
 
 def create_dispatcher(
@@ -29,4 +53,5 @@ def create_dispatcher(
 
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
     dispatcher.include_router(build_router())
+    dispatcher.startup.register(setup_bot_commands)
     return dispatcher
