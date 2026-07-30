@@ -125,7 +125,7 @@ const banner = isTest
 console.log(
     `${banner}\n` +
     `${c.green}▸ API${c.reset}  http://localhost:${API_PORT}  ${c.dim}(докс: /docs, конфіг: backend/${envFile})${c.reset}\n` +
-    `${c.green}▸ Сайт${c.reset} http://localhost:${WEB_PORT}/applications\n` +
+    `${c.green}▸ Сайт${c.reset} http://localhost:${WEB_PORT}/\n` +
     `${c.dim}Ctrl+C зупиняє обидва процеси.${c.reset}\n`
 );
 

@@ -3,7 +3,11 @@
 React-застосунок (Create React App) + Telegram-бот із базою даних.
 
 Бот приймає заявки покроковою анкетою, зберігає їх у БД, публікує в Telegram-групу
-і віддає на сайт через REST API — сторінка **[/applications](http://localhost:3000/applications)**.
+і віддає на сайт через REST API.
+
+Сайт складається з однієї сторінки — списку заявок. Вона відкривається одразу на
+корені **[http://localhost:3000/](http://localhost:3000/)**; `/applications`
+лишено робочим аліасом.
 
 - Фронтенд — цей каталог (`src/`), React + Redux
 - Бот + API — каталог [`backend/`](./backend/README.md), Python + aiogram + FastAPI
