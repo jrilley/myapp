@@ -180,6 +180,54 @@ async def count_employees(session: AsyncSession) -> int:
     return int(await session.scalar(select(func.count()).select_from(Employee)) or 0)
 
 
+def _employee_with_links():
+    return (
+        selectinload(Employee.role),
+        selectinload(Employee.company),
+        selectinload(Employee.position),
+    )
+
+
+async def list_employees(session: AsyncSession, *, limit: int = 30) -> list[Employee]:
+    stmt = (
+        select(Employee)
+        .options(*_employee_with_links())
+        .order_by(Employee.fullname)
+        .limit(limit)
+    )
+    return list(await session.scalars(stmt))
+
+
+async def get_employee(session: AsyncSession, employee_id: int) -> Employee | None:
+    stmt = (
+        select(Employee)
+        .where(Employee.id == employee_id)
+        .options(*_employee_with_links())
+    )
+    return await session.scalar(stmt)
+
+
+async def update_employee(
+    session: AsyncSession, employee: Employee, **fields
+) -> Employee:
+    """Оновлює лише передані поля. Значення не валідуються тут —
+    це робить хендлер, який знає контекст вводу."""
+    for name, value in fields.items():
+        setattr(employee, name, value)
+    await session.commit()
+
+    # id читаємо ДО expire: після нього будь-яке звернення до атрибута
+    # тягне синхронне довантаження, а в async-сесії це MissingGreenlet.
+    employee_id = employee.id
+
+    # Сесія створена з expire_on_commit=False, тому після коміту об'єкт
+    # лишається в identity map зі старими зв'язками: зміна role_id сама
+    # по собі не перечитує employee.role. Без expire повернувся б
+    # оновлений FK, але стара роль.
+    session.expire(employee)
+    return await get_employee(session, employee_id)
+
+
 async def list_companies(session: AsyncSession) -> list[Company]:
     return list(await session.scalars(select(Company).order_by(Company.name)))
 
@@ -204,6 +252,22 @@ async def create_company(
 
 async def list_positions(session: AsyncSession) -> list[Position]:
     return list(await session.scalars(select(Position).order_by(Position.id)))
+
+
+async def get_position_by_name(session: AsyncSession, name: str) -> Position | None:
+    return await session.scalar(select(Position).where(Position.position == name))
+
+
+async def create_position(session: AsyncSession, *, name: str) -> Position:
+    position = Position(position=name)
+    session.add(position)
+    await session.commit()
+    await session.refresh(position)
+    return position
+
+
+async def list_roles(session: AsyncSession) -> list[Role]:
+    return list(await session.scalars(select(Role).order_by(Role.id)))
 
 
 async def get_role_by_name(session: AsyncSession, name: str) -> Role | None:

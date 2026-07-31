@@ -17,6 +17,13 @@ MENU_BACK = "menu:back"
 MENU_ALL = "menu:all"
 MENU_STATS = "menu:stats"
 MENU_COMPANIES = "menu:companies"
+MENU_EMPLOYEES = "menu:employees"
+MENU_POSITIONS = "menu:positions"
+
+EMP_VIEW_PREFIX = "emp"
+EMP_EDIT_PREFIX = "empedit"
+EMP_SET_PREFIX = "empset"
+POSITION_ADD = "position:add"
 
 FORM_CANCEL = "form:cancel"
 DELETE_PREFIX = "del"
@@ -52,6 +59,8 @@ def main_menu_keyboard(
         builder.button(text="🗂 Усі заявки", callback_data=MENU_ALL)
         builder.button(text="📊 Статистика", callback_data=MENU_STATS)
     if is_main_admin:
+        builder.button(text="👥 Користувачі", callback_data=MENU_EMPLOYEES)
+        builder.button(text="💼 Посади", callback_data=MENU_POSITIONS)
         builder.button(text="🏢 Компанії", callback_data=MENU_COMPANIES)
     builder.button(text="ℹ️ Довідка", callback_data=MENU_HELP)
     builder.adjust(1)
@@ -85,6 +94,60 @@ def registration_confirm_keyboard() -> InlineKeyboardMarkup:
 def companies_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Додати компанію", callback_data=COMPANY_ADD)
+    builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def employees_keyboard(employees) -> InlineKeyboardMarkup:
+    """Список співробітників: кожен — кнопка, що відкриває картку."""
+    builder = InlineKeyboardBuilder()
+    for employee in employees:
+        builder.button(
+            text=f"{employee.fullname} · {employee.role.role}",
+            callback_data=f"{EMP_VIEW_PREFIX}:{employee.id}",
+        )
+    builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def employee_card_keyboard(employee_id: int) -> InlineKeyboardMarkup:
+    """Що саме редагуємо — вирішує кнопка; редактор один на поле."""
+    builder = InlineKeyboardBuilder()
+    for field, title in (
+        ("name", "✏️ ПІБ"),
+        ("phone", "✏️ Телефон"),
+        ("company", "🏢 Компанія"),
+        ("position", "💼 Посада"),
+        ("role", "🔑 Роль"),
+    ):
+        builder.button(
+            text=title, callback_data=f"{EMP_EDIT_PREFIX}:{field}:{employee_id}"
+        )
+    builder.button(text="⬅️ До списку", callback_data=MENU_EMPLOYEES)
+    builder.adjust(2, 2, 1, 1)
+    return builder.as_markup()
+
+
+def employee_choice_keyboard(field: str, employee_id: int, items) -> InlineKeyboardMarkup:
+    """Варіанти для поля-довідника; вибір застосовується одразу."""
+    builder = InlineKeyboardBuilder()
+    for item_id, title in items:
+        builder.button(
+            text=title,
+            callback_data=f"{EMP_SET_PREFIX}:{field}:{employee_id}:{item_id}",
+        )
+    builder.button(
+        text="⬅️ Назад", callback_data=f"{EMP_VIEW_PREFIX}:{employee_id}"
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def positions_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Додати посаду", callback_data=POSITION_ADD)
     builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
     builder.adjust(1)
     return builder.as_markup()

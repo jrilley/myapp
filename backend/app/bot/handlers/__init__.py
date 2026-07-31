@@ -1,6 +1,6 @@
 from aiogram import Router
 
-from app.bot.handlers import admin, common, form, registration
+from app.bot.handlers import admin, common, form, management, registration
 
 
 def build_router() -> Router:
@@ -9,6 +9,7 @@ def build_router() -> Router:
     router = Router(name="root")
     router.include_router(common.router)
     router.include_router(registration.router)
+    router.include_router(management.router)
     router.include_router(admin.router)
     router.include_router(form.router)
     return router

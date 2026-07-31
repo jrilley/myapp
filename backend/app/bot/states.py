@@ -29,3 +29,17 @@ class CompanyForm(StatesGroup):
     name = State()
     tax_id = State()
     address = State()
+
+
+class EmployeeEdit(StatesGroup):
+    """Редагування текстових полів співробітника. Поля-довідники (компанія,
+    посада, роль) міняються кнопкою й стану не потребують."""
+
+    fullname = State()
+    phone = State()
+
+
+class PositionForm(StatesGroup):
+    """Додавання посади в довідник."""
+
+    name = State()

@@ -231,6 +231,8 @@ MENU_BUTTONS = [
     ("«Мої заявки»", "зареєстровані", "Свої заявки, до 10, з кнопкою видалення."),
     ("«Усі заявки»", "адміни", "Останні 10 заявок усіх користувачів, з автором."),
     ("«Статистика»", "адміни", "Кількість заявок за статусами."),
+    ("«Користувачі»", "головний адмін", "Список, картка кожного, редагування полів."),
+    ("«Посади»", "головний адмін", "Довідник посад і додавання нових."),
     ("«Компанії»", "головний адмін", "Список компаній і додавання нових."),
     ("«Скасувати»", "усі", "Під кожним кроком анкети — вихід в одне натискання."),
     ("«Видалити #N»", "автор або адмін", "Видаляє заявку і перемальовує список."),
@@ -403,7 +405,8 @@ def page_route(s: Sheet) -> None:
            size=8, leading=10.5, color=AMBER)
 
     # ---- нижні панелі ----
-    panel_top = 440
+    # Жовтий блок вище закінчується на ~418 — панелі мають починатись під ним.
+    panel_top = 430
     left_w, right_w = 520, 590
 
     ty2 = s.section(M, panel_top, left_w, "керування: inline-кнопки")
@@ -415,17 +418,17 @@ def page_route(s: Sheet) -> None:
         s.line(M, row, M + left_w, row, color=LINE_SOFT, width=0.6)
         s.text(M, row + 15, button, font="Sans-Bold", size=8.5, color=INK)
         s.text(M + 138, row + 15, who, font="Sans", size=8, color=SLATE)
-        end = s.wrap(M + 242, row + 15, left_w - 242, what, size=8, leading=10, color=INK)
-        row = max(row + 26, end + 5)
+        end = s.wrap(M + 242, row + 14, left_w - 242, what, size=7.6, leading=9.4,
+                     color=INK)
+        row = max(row + 23, end + 2)
     s.line(M, row, M + left_w, row, color=LINE_SOFT, width=0.6)
 
-    s.wrap(M, row + 18, left_w,
-           "Склад меню залежить від того, чи є користувач у ADMIN_TELEGRAM_IDS. "
-           "Приховування кнопки не є захистом — callback_data можна підробити, "
-           "тому права перевіряються при кожному виклику. Команди теж лишаються "
-           "робочими й показані в меню команд Telegram:",
-           size=8, leading=10.5)
-    cx, cy = M, row + 46
+    s.wrap(M, row + 16, left_w,
+           "Склад меню визначає роль у employees. Приховування кнопки не є "
+           "захистом — callback_data можна підробити, тому права перевіряються "
+           "при кожному виклику. Команди теж лишаються робочими:",
+           size=7.8, leading=10)
+    cx, cy = M, row + 44
     for cmd, label in COMMANDS:
         w = pdfmetrics.stringWidth(f"{cmd} — {label}", "Mono", 7) + 14
         if cx + w > M + left_w:
