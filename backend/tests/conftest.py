@@ -4,10 +4,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_publisher
+from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER, Access
 from app.config import Settings, get_settings
 from app.db import Base, create_engine, get_db
 from app.main import create_app
-from app.models import Application
+from app.models import Application, Employee, Role
 
 TEST_ADMIN_TOKEN = "test-admin-token"
 
@@ -53,6 +54,50 @@ class FakeCallback:
 
     async def answer(self, text: str | None = None, **_kwargs) -> None:
         self.answered.append(text)
+
+
+def make_access(
+    user_id: int = OWNER_ID,
+    *,
+    role: str = ROLE_USER,
+    registered: bool = True,
+    bootstrap_admin: bool = False,
+) -> Access:
+    """Access без походу в БД: він читає лише employee.role.role і fullname,
+    тож транзієнтних об'єктів достатньо."""
+    employee = None
+    if registered:
+        employee = Employee(
+            tg_id=user_id,
+            fullname="Тестовий Співробітник",
+            phone_number="+380000000000",
+            company_id=1,
+            position_id=1,
+            role_id=1,
+        )
+        employee.role = Role(id=1, role=role)
+    return Access(
+        telegram_user_id=user_id,
+        employee=employee,
+        bootstrap_admin=bootstrap_admin,
+    )
+
+
+@pytest.fixture
+def access() -> Access:
+    """Звичайний зареєстрований користувач."""
+    return make_access(OWNER_ID)
+
+
+@pytest.fixture
+def access_admin() -> Access:
+    return make_access(ADMIN_ID, role=ROLE_MAIN_ADMIN)
+
+
+@pytest.fixture
+def access_guest() -> Access:
+    """Незареєстрований — йому доступна лише реєстрація."""
+    return make_access(STRANGER_ID, registered=False)
 
 
 def callback_data(markup) -> list[str]:

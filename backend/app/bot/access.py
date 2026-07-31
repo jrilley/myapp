@@ -1,0 +1,61 @@
+"""Хто цей користувач і що йому дозволено.
+
+Права визначає роль у таблиці employees, а не список у .env.
+ADMIN_TELEGRAM_IDS лишається **аварійним входом**: без нього виникає замкнене
+коло — поки немає жодного співробітника, немає й адміна, а отже нікому завести
+компанію, без якої неможливо зареєструватись.
+"""
+
+from dataclasses import dataclass
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import repository
+from app.config import Settings
+from app.models import Employee
+
+ROLE_MAIN_ADMIN = "Головний адміністратор"
+ROLE_COMPANY_ADMIN = "Адміністратор компанії"
+ROLE_USER = "Користувач"
+
+ADMIN_ROLES = frozenset({ROLE_MAIN_ADMIN, ROLE_COMPANY_ADMIN})
+
+
+@dataclass(frozen=True)
+class Access:
+    telegram_user_id: int
+    employee: Employee | None
+    #: True, якщо доступ отриманий через ADMIN_TELEGRAM_IDS, а не через роль.
+    bootstrap_admin: bool = False
+
+    @property
+    def is_registered(self) -> bool:
+        return self.employee is not None
+
+    @property
+    def role_name(self) -> str | None:
+        return self.employee.role.role if self.employee is not None else None
+
+    @property
+    def is_admin(self) -> bool:
+        return self.bootstrap_admin or self.role_name in ADMIN_ROLES
+
+    @property
+    def is_main_admin(self) -> bool:
+        """Тільки головний адміністратор заводить компанії."""
+        return self.bootstrap_admin or self.role_name == ROLE_MAIN_ADMIN
+
+    @property
+    def fullname(self) -> str | None:
+        return self.employee.fullname if self.employee is not None else None
+
+
+async def resolve_access(
+    session: AsyncSession, settings: Settings, telegram_user_id: int
+) -> Access:
+    employee = await repository.get_employee_by_tg_id(session, telegram_user_id)
+    return Access(
+        telegram_user_id=telegram_user_id,
+        employee=employee,
+        bootstrap_admin=settings.is_admin(telegram_user_id),
+    )

@@ -12,6 +12,7 @@ from app.bot.constants import (
     MAX_FULL_NAME,
     MIN_DESCRIPTION,
 )
+from app.bot.access import Access
 from app.bot.formatting import format_summary
 from app.bot.keyboards import (
     CATEGORY_PREFIX,
@@ -24,14 +25,18 @@ from app.bot.keyboards import (
     categories_keyboard,
     confirm_keyboard,
     main_menu_keyboard,
+    registration_prompt_keyboard,
 )
 from app.bot.publisher import Publisher
 from app.bot.states import ApplicationForm
-from app.config import Settings
 
 router = Router(name="form")
 
 FIRST_QUESTION = "Як вас звати? (ПІБ)"
+NOT_REGISTERED = (
+    "Заявки приймаються лише від зареєстрованих співробітників. "
+    "Спершу пройдіть реєстрацію."
+)
 
 
 async def _start_form(state: FSMContext) -> None:
@@ -40,31 +45,47 @@ async def _start_form(state: FSMContext) -> None:
 
 
 @router.message(Command("new"))
-async def cmd_new(message: Message, state: FSMContext) -> None:
+async def cmd_new(message: Message, state: FSMContext, access: Access) -> None:
+    if not access.is_registered:
+        await message.answer(NOT_REGISTERED, reply_markup=registration_prompt_keyboard())
+        return
     await _start_form(state)
     await message.answer(FIRST_QUESTION, reply_markup=cancel_keyboard())
 
 
 @router.callback_query(F.data == MENU_NEW)
-async def on_menu_new(callback: CallbackQuery, state: FSMContext) -> None:
-    await _start_form(state)
+async def on_menu_new(
+    callback: CallbackQuery, state: FSMContext, access: Access
+) -> None:
     await callback.answer()
-    if callback.message is not None:
-        await callback.message.answer(FIRST_QUESTION, reply_markup=cancel_keyboard())
+    if callback.message is None:
+        return
+    # Кнопки «Нова заявка» незареєстрованому не видно, але callback_data
+    # можна переслати — тому перевіряємо, а не покладаємось на меню.
+    if not access.is_registered:
+        await callback.message.answer(
+            NOT_REGISTERED, reply_markup=registration_prompt_keyboard()
+        )
+        return
+    await _start_form(state)
+    await callback.message.answer(FIRST_QUESTION, reply_markup=cancel_keyboard())
 
 
 @router.callback_query(F.data == FORM_CANCEL)
 async def on_cancel(
-    callback: CallbackQuery, state: FSMContext, settings: Settings
+    callback: CallbackQuery, state: FSMContext, access: Access
 ) -> None:
-    """Без фільтра стану: «Скасувати» має спрацьовувати з будь-якого кроку."""
+    """Без фільтра стану: «Скасувати» має спрацьовувати з будь-якого кроку —
+    і в анкеті заявки, і в реєстрації."""
     await state.clear()
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
             "Заповнення скасовано.",
             reply_markup=main_menu_keyboard(
-                is_admin=settings.is_admin(callback.from_user.id)
+                is_registered=access.is_registered,
+                is_admin=access.is_admin,
+                is_main_admin=access.is_main_admin,
             ),
         )
 
@@ -189,7 +210,7 @@ async def step_confirm(
 
 @router.callback_query(ApplicationForm.confirm, F.data == CONFIRM_NO)
 async def step_reject(
-    callback: CallbackQuery, state: FSMContext, settings: Settings
+    callback: CallbackQuery, state: FSMContext, access: Access
 ) -> None:
     await state.clear()
     await callback.answer()
@@ -197,7 +218,9 @@ async def step_reject(
         await callback.message.answer(
             "Заявку не надіслано.",
             reply_markup=main_menu_keyboard(
-                is_admin=settings.is_admin(callback.from_user.id)
+                is_registered=access.is_registered,
+                is_admin=access.is_admin,
+                is_main_admin=access.is_main_admin,
             ),
         )
 

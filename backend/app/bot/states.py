@@ -10,3 +10,22 @@ class ApplicationForm(StatesGroup):
     category = State()
     description = State()
     confirm = State()
+
+
+class Registration(StatesGroup):
+    """Реєстрація нового співробітника — рядок у employees."""
+
+    fullname = State()
+    phone = State()
+    company = State()
+    position = State()
+    confirm = State()
+
+
+class CompanyForm(StatesGroup):
+    """Заведення компанії. Доступна лише головному адміністратору:
+    без жодної компанії зареєструватись неможливо."""
+
+    name = State()
+    tax_id = State()
+    address = State()

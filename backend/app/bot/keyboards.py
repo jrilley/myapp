@@ -16,26 +16,76 @@ MENU_HELP = "menu:help"
 MENU_BACK = "menu:back"
 MENU_ALL = "menu:all"
 MENU_STATS = "menu:stats"
+MENU_COMPANIES = "menu:companies"
 
 FORM_CANCEL = "form:cancel"
 DELETE_PREFIX = "del"
 
+REG_START = "reg:start"
+REG_COMPANY_PREFIX = "reg:company"
+REG_POSITION_PREFIX = "reg:position"
+REG_CONFIRM = "reg:confirm"
 
-def main_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
-    """Головне меню. Склад залежить від того, чи є користувач у
-    ADMIN_TELEGRAM_IDS: адмін додатково бачить усі заявки й статистику.
+COMPANY_ADD = "company:add"
 
-    Приховування кнопки — це лише зручність, не захист: callback_data можна
-    переслати або підробити. Тому кожен адмінський хендлер перевіряє права
-    самостійно (див. app/bot/handlers/common.py).
+
+def main_menu_keyboard(
+    *, is_registered: bool = False, is_admin: bool = False, is_main_admin: bool = False
+) -> InlineKeyboardMarkup:
+    """Меню під конкретного користувача.
+
+    Незареєстрованому доступна лише реєстрація — заявки без неї не подати.
+    Приховування кнопки не є захистом: callback_data можна переслати або
+    підробити, тому кожен обмежений хендлер перевіряє права самостійно.
     """
     builder = InlineKeyboardBuilder()
+
+    if not is_registered:
+        builder.button(text="🔑 Зареєструватися", callback_data=REG_START)
+        builder.button(text="ℹ️ Довідка", callback_data=MENU_HELP)
+        builder.adjust(1)
+        return builder.as_markup()
+
     builder.button(text="📝 Нова заявка", callback_data=MENU_NEW)
     builder.button(text="📋 Мої заявки", callback_data=MENU_MY)
     if is_admin:
         builder.button(text="🗂 Усі заявки", callback_data=MENU_ALL)
         builder.button(text="📊 Статистика", callback_data=MENU_STATS)
+    if is_main_admin:
+        builder.button(text="🏢 Компанії", callback_data=MENU_COMPANIES)
     builder.button(text="ℹ️ Довідка", callback_data=MENU_HELP)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def registration_prompt_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔑 Зареєструватися", callback_data=REG_START)
+    return builder.as_markup()
+
+
+def choices_keyboard(prefix: str, items) -> InlineKeyboardMarkup:
+    """Кнопки «id → назва» для довідників (компанії, посади) + скасування."""
+    builder = InlineKeyboardBuilder()
+    for item_id, title in items:
+        builder.button(text=title, callback_data=f"{prefix}:{item_id}")
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def registration_confirm_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Підтвердити", callback_data=REG_CONFIRM)
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def companies_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Додати компанію", callback_data=COMPANY_ADD)
+    builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
     builder.adjust(1)
     return builder.as_markup()
 

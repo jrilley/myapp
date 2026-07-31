@@ -1,4 +1,4 @@
-"""Тести FSM-анкети.
+﻿"""Тести FSM-анкети.
 
 Хендлери викликаються напряму з фейковими Message/CallbackQuery і реальним
 FSMContext на MemoryStorage — жодних мережевих викликів до Telegram.
@@ -25,6 +25,7 @@ from app.bot.handlers.form import (
 )
 from app.bot.states import ApplicationForm
 from tests.conftest import (
+    make_access,
     ADMIN_ID,
     OWNER_ID,
     STRANGER_ID,
@@ -41,16 +42,16 @@ def state() -> FSMContext:
     )
 
 
-async def _fill_until_confirm(state: FSMContext) -> None:
-    await cmd_new(FakeMessage(), state)
+async def _fill_until_confirm(state: FSMContext, access) -> None:
+    await cmd_new(FakeMessage(), state, access)
     await step_full_name(FakeMessage("Іван Петренко"), state)
     await step_contact(FakeMessage("+380000000000"), state)
     await step_category(FakeCallback("cat:0"), state)
     await step_description(FakeMessage("Достатньо довгий опис заявки"), state)
 
 
-async def test_form_advances_through_all_steps(state):
-    await _fill_until_confirm(state)
+async def test_form_advances_through_all_steps(state, access):
+    await _fill_until_confirm(state, access)
 
     assert await state.get_state() == ApplicationForm.confirm
     data = await state.get_data()
@@ -58,8 +59,8 @@ async def test_form_advances_through_all_steps(state):
     assert data["category"] == CATEGORIES[0]
 
 
-async def test_confirm_saves_application_and_publishes(state, session, publisher):
-    await _fill_until_confirm(state)
+async def test_confirm_saves_application_and_publishes(state, session, publisher, access):
+    await _fill_until_confirm(state, access)
     callback = FakeCallback("confirm:yes")
 
     await step_confirm(callback, state, session, publisher)
@@ -75,8 +76,8 @@ async def test_confirm_saves_application_and_publishes(state, session, publisher
     assert await state.get_state() is None
 
 
-async def test_short_name_keeps_state_and_data(state):
-    await cmd_new(FakeMessage(), state)
+async def test_short_name_keeps_state_and_data(state, access):
+    await cmd_new(FakeMessage(), state, access)
     message = FakeMessage("І")
 
     await step_full_name(message, state)
@@ -86,8 +87,8 @@ async def test_short_name_keeps_state_and_data(state):
     assert "від 2 до" in message.answers[0]
 
 
-async def test_short_description_keeps_state(state):
-    await cmd_new(FakeMessage(), state)
+async def test_short_description_keeps_state(state, access):
+    await cmd_new(FakeMessage(), state, access)
     await step_full_name(FakeMessage("Іван Петренко"), state)
     await step_contact(FakeMessage("+380000000000"), state)
     await step_category(FakeCallback("cat:1"), state)
@@ -99,8 +100,8 @@ async def test_short_description_keeps_state(state):
     assert "Опис має бути" in message.answers[0]
 
 
-async def test_unknown_category_does_not_advance(state):
-    await cmd_new(FakeMessage(), state)
+async def test_unknown_category_does_not_advance(state, access):
+    await cmd_new(FakeMessage(), state, access)
     await step_full_name(FakeMessage("Іван Петренко"), state)
     await step_contact(FakeMessage("+380000000000"), state)
 
@@ -111,26 +112,26 @@ async def test_unknown_category_does_not_advance(state):
     assert callback.answered == ["Невідома категорія"]
 
 
-async def test_cancel_clears_state(state, settings):
-    await cmd_new(FakeMessage(), state)
+async def test_cancel_clears_state(state, access):
+    await cmd_new(FakeMessage(), state, access)
     await step_full_name(FakeMessage("Іван Петренко"), state)
 
-    await cmd_cancel(FakeMessage(), state, settings)
+    await cmd_cancel(FakeMessage(), state, access)
 
     assert await state.get_state() is None
 
 
-async def test_reject_on_confirm_saves_nothing(state, session, settings):
-    await _fill_until_confirm(state)
+async def test_reject_on_confirm_saves_nothing(state, session, access):
+    await _fill_until_confirm(state, access)
 
-    await step_reject(FakeCallback("confirm:no"), state, settings)
+    await step_reject(FakeCallback("confirm:no"), state, access)
 
     _, total = await repository.list_applications(session)
     assert total == 0
     assert await state.get_state() is None
 
 
-async def test_my_lists_only_own_applications(session):
+async def test_my_lists_only_own_applications(session, access):
     await repository.create_application(
         session,
         telegram_user_id=OWNER_ID,
@@ -151,7 +152,7 @@ async def test_my_lists_only_own_applications(session):
     )
 
     message = FakeMessage(user=FakeUser(OWNER_ID))
-    await cmd_my(message, session)
+    await cmd_my(message, session, access)
 
     assert "Власна заявка" not in message.answers[0]  # у списку лише категорія+опис
     assert "опис власної заявки" in message.answers[0]
@@ -174,7 +175,7 @@ async def _seed_owned(session, publisher):
     return application
 
 
-async def test_owner_can_delete_own_application(session, publisher, settings):
+async def test_owner_can_delete_own_application(session, publisher, access):
     application = await _seed_owned(session, publisher)
     message = FakeMessage(user=FakeUser(OWNER_ID))
 
@@ -183,7 +184,7 @@ async def test_owner_can_delete_own_application(session, publisher, settings):
         CommandObject(prefix="/", command="delete", args=str(application.id)),
         session,
         publisher,
-        settings,
+        access,
     )
 
     _, total = await repository.list_applications(session)
@@ -191,10 +192,9 @@ async def test_owner_can_delete_own_application(session, publisher, settings):
     assert publisher.retracted == [(publisher.chat_id, publisher.message_id)]
 
 
-async def test_stranger_cannot_delete_someone_elses_application(
-    session, publisher, settings
-):
+async def test_stranger_cannot_delete_someone_elses_application(session, publisher):
     application = await _seed_owned(session, publisher)
+    stranger = make_access(STRANGER_ID)
     message = FakeMessage(user=FakeUser(STRANGER_ID))
 
     await cmd_delete(
@@ -202,7 +202,7 @@ async def test_stranger_cannot_delete_someone_elses_application(
         CommandObject(prefix="/", command="delete", args=str(application.id)),
         session,
         publisher,
-        settings,
+        stranger,
     )
 
     _, total = await repository.list_applications(session)
@@ -211,7 +211,7 @@ async def test_stranger_cannot_delete_someone_elses_application(
     assert publisher.retracted == []
 
 
-async def test_admin_can_delete_any_application(session, publisher, settings):
+async def test_admin_can_delete_any_application(session, publisher, access_admin):
     application = await _seed_owned(session, publisher)
     message = FakeMessage(user=FakeUser(ADMIN_ID))
 
@@ -220,14 +220,14 @@ async def test_admin_can_delete_any_application(session, publisher, settings):
         CommandObject(prefix="/", command="delete", args=str(application.id)),
         session,
         publisher,
-        settings,
+        access_admin,
     )
 
     _, total = await repository.list_applications(session)
     assert total == 0
 
 
-async def test_delete_requires_numeric_id(session, publisher, settings):
+async def test_delete_requires_numeric_id(session, publisher, access_admin):
     message = FakeMessage(user=FakeUser(ADMIN_ID))
 
     await cmd_delete(
@@ -235,7 +235,7 @@ async def test_delete_requires_numeric_id(session, publisher, settings):
         CommandObject(prefix="/", command="delete", args="abc"),
         session,
         publisher,
-        settings,
+        access_admin,
     )
 
     assert "Використання" in message.answers[0]

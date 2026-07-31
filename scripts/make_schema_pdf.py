@@ -226,11 +226,12 @@ class Sheet:
 # Без емодзі: в Arial цих гліфів немає, у PDF вони виходять порожніми
 # квадратами. У самому боті кнопки, звісно, з піктограмами.
 MENU_BUTTONS = [
-    ("«Нова заявка»", "усі", "Починає анкету з першого кроку."),
-    ("«Мої заявки»", "усі", "Свої заявки, до 10, у кожної кнопка видалення."),
+    ("«Зареєструватися»", "гості", "Анкета реєстрації: рядок у employees."),
+    ("«Нова заявка»", "зареєстровані", "Починає анкету з першого кроку."),
+    ("«Мої заявки»", "зареєстровані", "Свої заявки, до 10, з кнопкою видалення."),
     ("«Усі заявки»", "адміни", "Останні 10 заявок усіх користувачів, з автором."),
     ("«Статистика»", "адміни", "Кількість заявок за статусами."),
-    ("«Довідка»", "усі", "Довідка й повернення в меню."),
+    ("«Компанії»", "головний адмін", "Список компаній і додавання нових."),
     ("«Скасувати»", "усі", "Під кожним кроком анкети — вихід в одне натискання."),
     ("«Видалити #N»", "автор або адмін", "Видаляє заявку і перемальовує список."),
 ]
@@ -618,9 +619,10 @@ def page_organization(s: Sheet) -> None:
     s.eyebrow(M, 46, "myapp · схема системи", color=TEAL)
     s.text(M, 76, "Компанії та співробітники", font="Sans-Bold", size=25, color=INK)
     s.wrap(M, 96, 660,
-           "Чотири таблиці: одна довідкова структура організації плюс два "
-           "довідники. Employees посилається на всі три; заявки (аркуш 2) поки "
-           "з ними не зв'язані.",
+           "Реєстрація в боті створює рядок у employees: ПІБ, телефон, компанія "
+           "та посада з довідників. Роль нового користувача — «Користувач». "
+           "Заявку може подати лише зареєстрований; із заявками (аркуш 2) ці "
+           "таблиці поки не пов'язані.",
            size=8.6, leading=11.5)
     s.text(s.W - M, 76, "аркуш 3 / 3", font="Mono", size=8, color=SLATE, align="right")
 
@@ -653,7 +655,7 @@ def page_organization(s: Sheet) -> None:
         s.arrow(right_x - 30, to_ty, left_x + left_w, to_ty, color=TEAL, width=1.2,
                 head=5)
 
-    note_ty = 620
+    note_ty = 530
     s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
     s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
     s.wrap(M + 12, note_ty + 18, s.W - 2 * M - 24,
@@ -663,7 +665,7 @@ def page_organization(s: Sheet) -> None:
            "перевіряють — див. tests/test_organization.py.",
            size=8, leading=10.5, color=AMBER)
 
-    ty2 = s.section(M, 700, s.W - 2 * M, "відхилення від вихідного ddl")
+    ty2 = s.section(M, 610, s.W - 2 * M, "відхилення від вихідного ddl")
     s.wrap(M, ty2 + 10, s.W - 2 * M,
            "tg_id оголошено BIGINT, а не INTEGER. У SQLite різниці немає — там "
            "INTEGER і так 64-бітний. Але в PostgreSQL INTEGER 32-бітний, і "
@@ -672,9 +674,20 @@ def page_organization(s: Sheet) -> None:
            "applications.telegram_user_id.",
            size=8, leading=10.5)
 
+    ty3 = s.section(M, 700, s.W - 2 * M, "довідник roles")
+    cx = M
+    for name in ("Головний адміністратор", "Адміністратор компанії", "Користувач"):
+        w = pdfmetrics.stringWidth(name, "Mono", 7.5) + 16
+        s.box(cx, ty3 - 2, w, 16, fill=PANEL_ALT, stroke=LINE_SOFT)
+        s.text(cx + 8, ty3 + 9, name, font="Mono", size=7.5, color=SLATE)
+        cx += w + 8
+    s.text(cx + 6, ty3 + 9,
+           "· positions поки містить лише «Інше»", font="Sans", size=7.5, color=SLATE)
+
     s.line(M, s.H - 34, s.W - M, s.H - 34, color=LINE, width=0.6)
     s.text(M, s.H - 22,
-           "positions і roles — порожні довідники: рядки в них ще не заведені.",
+           "ADMIN_TELEGRAM_IDS лишається аварійним входом: без нього нікому "
+           "завести першу компанію.",
            font="Mono", size=7, color=SLATE)
 
 

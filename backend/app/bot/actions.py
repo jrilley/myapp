@@ -8,10 +8,10 @@ from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
+from app.bot.access import Access
 from app.bot.formatting import format_admin_application, format_own_application
 from app.bot.keyboards import applications_keyboard, back_to_menu_keyboard
 from app.bot.publisher import Publisher
-from app.config import Settings
 from app.models import ApplicationStatus
 
 ADMIN_LIST_LIMIT = 10
@@ -20,10 +20,9 @@ ADMIN_LIST_LIMIT = 10
 async def delete_application(
     session: AsyncSession,
     publisher: Publisher,
-    settings: Settings,
+    access: Access,
     *,
     application_id: int,
-    actor_id: int,
 ) -> tuple[bool, str]:
     """Повертає (чи вдалося, текст відповіді користувачу)."""
     application = await repository.get_application(session, application_id)
@@ -31,8 +30,8 @@ async def delete_application(
         return False, f"Заявку #{application_id} не знайдено."
 
     # Адмін може видалити будь-яку заявку, звичайний користувач — лише власну.
-    is_owner = application.telegram_user_id == actor_id
-    if not (is_owner or settings.is_admin(actor_id)):
+    is_owner = application.telegram_user_id == access.telegram_user_id
+    if not (is_owner or access.is_admin):
         return False, "Ви можете видаляти лише власні заявки."
 
     chat_id = application.group_chat_id

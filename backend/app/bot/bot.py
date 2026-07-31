@@ -9,7 +9,7 @@ from aiogram.types import BotCommand
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot.handlers import build_router
-from app.bot.middlewares import DbSessionMiddleware
+from app.bot.middlewares import AccessMiddleware, DbSessionMiddleware
 from app.bot.publisher import Publisher
 from app.config import Settings
 
@@ -51,7 +51,9 @@ def create_dispatcher(
     dispatcher["publisher"] = publisher
     dispatcher["settings"] = settings
 
+    # Порядок важливий: AccessMiddleware читає сесію, яку кладе перша.
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
+    dispatcher.update.middleware(AccessMiddleware(settings))
     dispatcher.include_router(build_router())
     dispatcher.startup.register(setup_bot_commands)
     return dispatcher

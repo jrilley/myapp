@@ -3,10 +3,10 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.access import Access
 from app.bot.actions import delete_application
-from app.bot.keyboards import main_menu_keyboard
+from app.bot.handlers.common import menu_for
 from app.bot.publisher import Publisher
-from app.config import Settings
 
 router = Router(name="admin")
 
@@ -17,14 +17,11 @@ async def cmd_delete(
     command: CommandObject,
     session: AsyncSession,
     publisher: Publisher,
-    settings: Settings,
+    access: Access,
 ) -> None:
-    """Текстовий шлях видалення. Кнопка «🗑» у /my робить те саме через
+    """Текстовий шлях видалення. Кнопка «🗑» у списку робить те саме через
     ту саму функцію — права перевіряються в одному місці."""
-    if message.from_user is None:
-        return
-
-    keyboard = main_menu_keyboard(is_admin=settings.is_admin(message.from_user.id))
+    keyboard = menu_for(access)
 
     if not command.args or not command.args.strip().isdigit():
         await message.answer(
@@ -35,8 +32,6 @@ async def cmd_delete(
         return
 
     _, response = await delete_application(
-        session, publisher, settings,
-        application_id=int(command.args.strip()),
-        actor_id=message.from_user.id,
+        session, publisher, access, application_id=int(command.args.strip())
     )
     await message.answer(response, reply_markup=keyboard)

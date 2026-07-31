@@ -1,0 +1,346 @@
+"""Реєстрація співробітника та заведення компаній.
+
+Реєстрація обов'язкова: без рядка в employees заявку подати не можна.
+Роль новому користувачу — «Користувач»; підвищує її адміністратор
+(поки що прямо в БД).
+"""
+
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import repository
+from app.bot.access import ROLE_USER, Access
+from app.bot.constants import (
+    MAX_ADDRESS,
+    MAX_COMPANY_NAME,
+    MAX_FULLNAME,
+    MAX_PHONE,
+    MAX_TAX_ID,
+    MIN_PHONE,
+)
+from app.bot.keyboards import (
+    COMPANY_ADD,
+    FORM_CANCEL,
+    MENU_COMPANIES,
+    REG_COMPANY_PREFIX,
+    REG_CONFIRM,
+    REG_POSITION_PREFIX,
+    REG_START,
+    cancel_keyboard,
+    choices_keyboard,
+    companies_keyboard,
+    main_menu_keyboard,
+    registration_confirm_keyboard,
+)
+from app.bot.states import CompanyForm, Registration
+
+router = Router(name="registration")
+
+
+def _menu(access: Access):
+    return main_menu_keyboard(
+        is_registered=access.is_registered,
+        is_admin=access.is_admin,
+        is_main_admin=access.is_main_admin,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Реєстрація
+# ---------------------------------------------------------------------------
+
+
+@router.callback_query(F.data == REG_START)
+async def on_register(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    access: Access,
+) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    if access.is_registered:
+        await callback.message.answer(
+            "Ви вже зареєстровані.", reply_markup=_menu(access)
+        )
+        return
+
+    # Без жодної компанії реєстрація не має чим завершитись — краще сказати
+    # це одразу, ніж провести людину через анкету й впертись у порожній список.
+    if not await repository.list_companies(session):
+        await callback.message.answer(
+            "Реєстрація поки неможлива: у системі ще немає жодної компанії.\n"
+            "Зверніться до головного адміністратора.",
+            reply_markup=_menu(access),
+        )
+        return
+
+    await state.clear()
+    await state.set_state(Registration.fullname)
+    await callback.message.answer(
+        "Реєстрація. Як вас звати? (ПІБ)", reply_markup=cancel_keyboard()
+    )
+
+
+@router.message(Registration.fullname, F.text)
+async def step_fullname(message: Message, state: FSMContext) -> None:
+    value = (message.text or "").strip()
+    if not 2 <= len(value) <= MAX_FULLNAME:
+        await message.answer(
+            f"ПІБ має бути від 2 до {MAX_FULLNAME} символів. Спробуйте ще раз.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await state.update_data(fullname=value)
+    await state.set_state(Registration.phone)
+    await message.answer("Ваш номер телефону:", reply_markup=cancel_keyboard())
+
+
+@router.message(Registration.phone, F.text)
+async def step_phone(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if not MIN_PHONE <= len(value) <= MAX_PHONE:
+        await message.answer(
+            f"Номер має бути від {MIN_PHONE} до {MAX_PHONE} символів. Спробуйте ще раз.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await state.update_data(phone_number=value)
+    await state.set_state(Registration.company)
+
+    companies = await repository.list_companies(session)
+    await message.answer(
+        "Оберіть компанію:",
+        reply_markup=choices_keyboard(
+            REG_COMPANY_PREFIX, [(c.id, c.name) for c in companies]
+        ),
+    )
+
+
+@router.callback_query(Registration.company, F.data.startswith(f"{REG_COMPANY_PREFIX}:"))
+async def step_company(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    company = (
+        await repository.get_company(session, int(raw_id)) if raw_id.isdigit() else None
+    )
+    if company is None:
+        await callback.answer("Невідома компанія", show_alert=True)
+        return
+
+    await state.update_data(company_id=company.id, company_name=company.name)
+    await state.set_state(Registration.position)
+    await callback.answer()
+
+    positions = await repository.list_positions(session)
+    if callback.message is not None:
+        await callback.message.answer(
+            "Оберіть посаду:",
+            reply_markup=choices_keyboard(
+                REG_POSITION_PREFIX, [(p.id, p.position) for p in positions]
+            ),
+        )
+
+
+@router.callback_query(
+    Registration.position, F.data.startswith(f"{REG_POSITION_PREFIX}:")
+)
+async def step_position(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    positions = {p.id: p for p in await repository.list_positions(session)}
+    position = positions.get(int(raw_id)) if raw_id.isdigit() else None
+    if position is None:
+        await callback.answer("Невідома посада", show_alert=True)
+        return
+
+    await state.update_data(position_id=position.id, position_name=position.position)
+    await state.set_state(Registration.confirm)
+    await callback.answer()
+
+    data = await state.get_data()
+    if callback.message is not None:
+        await callback.message.answer(
+            "<b>Перевірте дані:</b>\n\n"
+            f"<b>ПІБ:</b> {data['fullname']}\n"
+            f"<b>Телефон:</b> {data['phone_number']}\n"
+            f"<b>Компанія:</b> {data['company_name']}\n"
+            f"<b>Посада:</b> {data['position_name']}",
+            reply_markup=registration_confirm_keyboard(),
+        )
+
+
+@router.callback_query(Registration.confirm, F.data == REG_CONFIRM)
+async def step_confirm(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    access: Access,
+) -> None:
+    data = await state.get_data()
+    await state.clear()
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    # Могли зареєструватись з іншого пристрою, поки анкета була відкрита:
+    # tg_id унікальний, і вставка впала б помилкою БД.
+    if await repository.get_employee_by_tg_id(session, callback.from_user.id):
+        await callback.message.answer(
+            "Ви вже зареєстровані.", reply_markup=_menu(access)
+        )
+        return
+
+    role = await repository.get_role_by_name(session, ROLE_USER)
+    if role is None:
+        await callback.message.answer(
+            "Не вдалося завершити реєстрацію: у довіднику ролей немає "
+            f"«{ROLE_USER}». Зверніться до адміністратора."
+        )
+        return
+
+    employee = await repository.create_employee(
+        session,
+        tg_id=callback.from_user.id,
+        company_id=data["company_id"],
+        fullname=data["fullname"],
+        phone_number=data["phone_number"],
+        position_id=data["position_id"],
+        role_id=role.id,
+    )
+
+    # Access у data застарів — його порахували до створення рядка.
+    fresh = Access(
+        telegram_user_id=callback.from_user.id,
+        employee=await repository.get_employee_by_tg_id(session, employee.tg_id),
+        bootstrap_admin=access.bootstrap_admin,
+    )
+    await callback.message.answer(
+        f"✅ Реєстрацію завершено. Вітаємо, {data['fullname']}!",
+        reply_markup=_menu(fresh),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Компанії (лише головний адміністратор)
+# ---------------------------------------------------------------------------
+
+
+@router.callback_query(F.data == MENU_COMPANIES)
+async def on_companies(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    if not access.is_main_admin:
+        await callback.answer(
+            "Дія доступна лише головному адміністратору.", show_alert=True
+        )
+        return
+    await state.clear()
+    await callback.answer()
+
+    companies = await repository.list_companies(session)
+    if companies:
+        body = "\n".join(f"#{c.id} — {c.name} (ЄДРПОУ {c.tax_id})" for c in companies)
+        text = f"<b>Компанії:</b>\n\n{body}"
+    else:
+        text = "Компаній ще немає. Без них ніхто не зможе зареєструватись."
+    if callback.message is not None:
+        await callback.message.answer(text, reply_markup=companies_keyboard())
+
+
+@router.callback_query(F.data == COMPANY_ADD)
+async def on_company_add(
+    callback: CallbackQuery, state: FSMContext, access: Access
+) -> None:
+    if not access.is_main_admin:
+        await callback.answer(
+            "Дія доступна лише головному адміністратору.", show_alert=True
+        )
+        return
+    await state.clear()
+    await state.set_state(CompanyForm.name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Назва компанії:", reply_markup=cancel_keyboard()
+        )
+
+
+@router.message(CompanyForm.name, F.text)
+async def company_name(message: Message, state: FSMContext) -> None:
+    value = (message.text or "").strip()
+    if not 2 <= len(value) <= MAX_COMPANY_NAME:
+        await message.answer(
+            f"Назва має бути від 2 до {MAX_COMPANY_NAME} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await state.update_data(name=value)
+    await state.set_state(CompanyForm.tax_id)
+    await message.answer("Податковий номер (ЄДРПОУ/ІПН):", reply_markup=cancel_keyboard())
+
+
+@router.message(CompanyForm.tax_id, F.text)
+async def company_tax_id(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if not 4 <= len(value) <= MAX_TAX_ID:
+        await message.answer(
+            f"Номер має бути від 4 до {MAX_TAX_ID} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    # tax_id унікальний — перевіряємо тут, щоб не впертись у помилку БД
+    # після того, як людина введе ще й адресу.
+    if await repository.get_company_by_tax_id(session, value):
+        await message.answer(
+            "Компанія з таким номером уже є. Введіть інший.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await state.update_data(tax_id=value)
+    await state.set_state(CompanyForm.address)
+    await message.answer("Адреса компанії:", reply_markup=cancel_keyboard())
+
+
+@router.message(CompanyForm.address, F.text)
+async def company_address(
+    message: Message, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    value = (message.text or "").strip()
+    if not 4 <= len(value) <= MAX_ADDRESS:
+        await message.answer(
+            f"Адреса має бути від 4 до {MAX_ADDRESS} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    data = await state.get_data()
+    await state.clear()
+    company = await repository.create_company(
+        session, name=data["name"], tax_id=data["tax_id"], address=value
+    )
+    await message.answer(
+        f"✅ Компанію «{company.name}» додано (#{company.id}).",
+        reply_markup=_menu(access),
+    )
+
+
+@router.message(Registration.fullname)
+@router.message(Registration.phone)
+@router.message(CompanyForm.name)
+@router.message(CompanyForm.tax_id)
+@router.message(CompanyForm.address)
+async def non_text(message: Message) -> None:
+    await message.answer(
+        "Надішліть, будь ласка, текст.", reply_markup=cancel_keyboard()
+    )

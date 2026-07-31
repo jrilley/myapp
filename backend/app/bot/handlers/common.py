@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.access import Access
 from app.bot.actions import (
     delete_application,
     render_all_applications,
@@ -20,13 +21,22 @@ from app.bot.keyboards import (
     main_menu_keyboard,
 )
 from app.bot.publisher import Publisher
-from app.config import Settings
 
 router = Router(name="common")
 
-GREETING = "Вітаю! Я приймаю заявки. Оберіть дію:"
+GREETING_REGISTERED = "Вітаю! Я приймаю заявки. Оберіть дію:"
+GREETING_GUEST = (
+    "Вітаю! Щоб подавати заявки, спершу зареєструйтесь — "
+    "це займе хвилину."
+)
 
-HELP_TEXT = (
+HELP_GUEST = (
+    "Я приймаю заявки від зареєстрованих співробітників.\n\n"
+    "Натисніть «Зареєструватися»: знадобляться ПІБ, телефон, "
+    "компанія та посада."
+)
+
+HELP_REGISTERED = (
     "Я приймаю заявки.\n\n"
     "Користуйтесь кнопками нижче — вводити команди не потрібно.\n\n"
     "Якщо зручніше текстом, працюють і команди:\n"
@@ -42,66 +52,64 @@ ADMIN_HELP = (
 )
 
 
-def _menu_for(user_id: int, settings: Settings):
-    return main_menu_keyboard(is_admin=settings.is_admin(user_id))
+def menu_for(access: Access):
+    return main_menu_keyboard(
+        is_registered=access.is_registered,
+        is_admin=access.is_admin,
+        is_main_admin=access.is_main_admin,
+    )
 
 
-async def _reject_non_admin(callback: CallbackQuery, settings: Settings) -> bool:
+def _help_text(access: Access) -> str:
+    if not access.is_registered:
+        return HELP_GUEST
+    return HELP_REGISTERED + (ADMIN_HELP if access.is_admin else "")
+
+
+async def _reject_non_admin(callback: CallbackQuery, access: Access) -> bool:
     """Кнопку видно лише адмінам, але це не захист: callback_data можна
     переслати або підробити. Тому право перевіряємо на кожному виклику."""
-    if settings.is_admin(callback.from_user.id):
+    if access.is_admin:
         return False
     await callback.answer("Дія доступна лише адміністраторам.", show_alert=True)
     return True
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext, settings: Settings) -> None:
+async def cmd_start(message: Message, state: FSMContext, access: Access) -> None:
     # /start скидає незавершену анкету, щоб людина не залишалась
     # у «підвислому» стані з попередньої спроби.
     await state.clear()
-    if message.from_user is None:
-        return
-    await message.answer(GREETING, reply_markup=_menu_for(message.from_user.id, settings))
+    greeting = GREETING_REGISTERED if access.is_registered else GREETING_GUEST
+    await message.answer(greeting, reply_markup=menu_for(access))
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message, settings: Settings) -> None:
-    if message.from_user is None:
-        return
-    is_admin = settings.is_admin(message.from_user.id)
-    text = HELP_TEXT + (ADMIN_HELP if is_admin else "")
-    await message.answer(text, reply_markup=main_menu_keyboard(is_admin=is_admin))
+async def cmd_help(message: Message, access: Access) -> None:
+    await message.answer(_help_text(access), reply_markup=menu_for(access))
 
 
 @router.callback_query(F.data == MENU_HELP)
-async def on_help(callback: CallbackQuery, settings: Settings) -> None:
+async def on_help(callback: CallbackQuery, access: Access) -> None:
     await callback.answer()
-    is_admin = settings.is_admin(callback.from_user.id)
-    text = HELP_TEXT + (ADMIN_HELP if is_admin else "")
     if callback.message is not None:
         await callback.message.answer(
-            text, reply_markup=main_menu_keyboard(is_admin=is_admin)
+            _help_text(access), reply_markup=menu_for(access)
         )
 
 
 @router.callback_query(F.data == MENU_BACK)
-async def on_back(
-    callback: CallbackQuery, state: FSMContext, settings: Settings
-) -> None:
+async def on_back(callback: CallbackQuery, state: FSMContext, access: Access) -> None:
     await state.clear()
     await callback.answer()
+    greeting = GREETING_REGISTERED if access.is_registered else GREETING_GUEST
     if callback.message is not None:
-        await callback.message.answer(
-            GREETING, reply_markup=_menu_for(callback.from_user.id, settings)
-        )
+        await callback.message.answer(greeting, reply_markup=menu_for(access))
 
 
 @router.message(Command("cancel"))
-async def cmd_cancel(message: Message, state: FSMContext, settings: Settings) -> None:
-    if message.from_user is None:
-        return
-    keyboard = _menu_for(message.from_user.id, settings)
+async def cmd_cancel(message: Message, state: FSMContext, access: Access) -> None:
+    keyboard = menu_for(access)
     if await state.get_state() is None:
         await message.answer("Немає чого скасовувати.", reply_markup=keyboard)
         return
@@ -110,30 +118,34 @@ async def cmd_cancel(message: Message, state: FSMContext, settings: Settings) ->
 
 
 @router.message(Command("my"))
-async def cmd_my(message: Message, session: AsyncSession) -> None:
-    if message.from_user is None:
+async def cmd_my(message: Message, session: AsyncSession, access: Access) -> None:
+    if not access.is_registered:
+        await message.answer(_help_text(access), reply_markup=menu_for(access))
         return
-    text, keyboard = await render_own_applications(session, message.from_user.id)
+    text, keyboard = await render_own_applications(session, access.telegram_user_id)
     await message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == MENU_MY)
-async def on_my(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+async def on_my(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
     await state.clear()
     await callback.answer()
-    text, keyboard = await render_own_applications(session, callback.from_user.id)
-    if callback.message is not None:
-        await callback.message.answer(text, reply_markup=keyboard)
+    if callback.message is None:
+        return
+    if not access.is_registered:
+        await callback.message.answer(_help_text(access), reply_markup=menu_for(access))
+        return
+    text, keyboard = await render_own_applications(session, access.telegram_user_id)
+    await callback.message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == MENU_ALL)
 async def on_all(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession,
-    settings: Settings,
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    if await _reject_non_admin(callback, settings):
+    if await _reject_non_admin(callback, access):
         return
     await state.clear()
     await callback.answer()
@@ -144,12 +156,9 @@ async def on_all(
 
 @router.callback_query(F.data == MENU_STATS)
 async def on_stats(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession,
-    settings: Settings,
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    if await _reject_non_admin(callback, settings):
+    if await _reject_non_admin(callback, access):
         return
     await state.clear()
     await callback.answer()
@@ -163,7 +172,7 @@ async def on_delete(
     callback: CallbackQuery,
     session: AsyncSession,
     publisher: Publisher,
-    settings: Settings,
+    access: Access,
 ) -> None:
     raw_id = (callback.data or "").split(":", 1)[1]
     if not raw_id.isdigit():
@@ -171,16 +180,17 @@ async def on_delete(
         return
 
     ok, response = await delete_application(
-        session, publisher, settings,
-        application_id=int(raw_id), actor_id=callback.from_user.id,
+        session, publisher, access, application_id=int(raw_id)
     )
     await callback.answer(response, show_alert=not ok)
 
     # Перемальовуємо список на місці, щоб видалений запис одразу зник.
     # Адміну показуємо загальний список, решті — свій.
     if ok and callback.message is not None:
-        if settings.is_admin(callback.from_user.id):
+        if access.is_admin:
             text, keyboard = await render_all_applications(session)
         else:
-            text, keyboard = await render_own_applications(session, callback.from_user.id)
+            text, keyboard = await render_own_applications(
+                session, access.telegram_user_id
+            )
         await callback.message.edit_text(text, reply_markup=keyboard)
