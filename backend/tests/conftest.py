@@ -1,11 +1,11 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_publisher
 from app.config import Settings, get_settings
-from app.db import Base, get_db
+from app.db import Base, create_engine, get_db
 from app.main import create_app
 from app.models import Application
 
@@ -82,7 +82,9 @@ class FakePublisher:
 @pytest.fixture
 async def engine():
     # StaticPool + in-memory: усі підключення бачать ту саму БД.
-    engine = create_async_engine(
+    # Через app.db.create_engine, а не напряму, — щоб застосувались ті самі
+    # PRAGMA, що й у бойовій БД (зокрема foreign_keys=ON).
+    engine = create_engine(
         "sqlite+aiosqlite://",
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},

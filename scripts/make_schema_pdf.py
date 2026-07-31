@@ -1,4 +1,4 @@
-"""Генерує docs/schema.pdf — векторну схему проєкту.
+﻿"""Генерує docs/schema.pdf — векторну схему проєкту.
 
 Запуск (з кореня репозиторію):
     backend/.venv/Scripts/python.exe scripts/make_schema_pdf.py     # Windows
@@ -147,10 +147,11 @@ class Sheet:
         self.line(x1, ty1, x2, ty2, color=color, width=width)
         self.c.setFillColor(color)
         p = self.c.beginPath()
-        if ty1 == ty2:  # горизонтальна
+        if ty1 == ty2:  # горизонтальна, у будь-який бік
+            back = head if x2 >= x1 else -head
             p.moveTo(x2, self.H - ty2)
-            p.lineTo(x2 - head, self.H - ty2 + head * 0.55)
-            p.lineTo(x2 - head, self.H - ty2 - head * 0.55)
+            p.lineTo(x2 - back, self.H - ty2 + head * 0.55)
+            p.lineTo(x2 - back, self.H - ty2 - head * 0.55)
         else:  # вертикальна
             direction = 1 if ty2 > ty1 else -1
             p.moveTo(x2, self.H - ty2)
@@ -184,6 +185,34 @@ class Sheet:
         self.text(x + 11, ty + 33, title, font="Sans-Bold", size=10.5, color=INK)
         if detail:
             self.wrap(x + 11, ty + 47, w - 22, detail, size=7.6, leading=9.8)
+
+    def entity(self, x, ty, w, title, rows, *, accent=TEAL):
+        """Таблиця у вигляді ER-сутності: шапка + рядки «колонка · тип · ознака».
+        Повертає ty нижнього краю та словник {колонка: ty її рядка} — за ним
+        малюються стрілки зв'язків."""
+        header_h, row_h = 20, 21
+        height = header_h + row_h * len(rows)
+
+        self.box(x, ty, w, height, fill=PANEL, stroke=accent, width=1.4)
+        self.box(x, ty, w, header_h, fill=accent, stroke=accent)
+        self.text(x + 9, ty + 14, title, font="Mono-Bold", size=8.5,
+                  color=HexColor("#FFFFFF"))
+
+        anchors = {}
+        cursor = ty + header_h
+        for name, coltype, flag in rows:
+            anchors[name] = cursor + row_h / 2
+            self.text(x + 9, cursor + 14, name, font="Mono-Bold", size=7.5, color=INK)
+            self.text(x + 140, cursor + 14, coltype, font="Mono", size=7, color=SLATE)
+            if flag:
+                color = RUST if flag == "PK" else (TEAL if flag == "FK" else AMBER)
+                self.text(x + w - 9, cursor + 14, flag, font="Mono-Bold", size=6.8,
+                          color=color, align="right")
+            cursor += row_h
+            if cursor < ty + height:
+                self.line(x, cursor, x + w, cursor, color=LINE_SOFT, width=0.5)
+
+        return ty + height, anchors
 
     def section(self, x, ty, w, label):
         self.line(x, ty, x + w, ty, color=INK, width=1.4)
@@ -318,7 +347,7 @@ def page_route(s: Sheet) -> None:
         "джерело правди: публікація в групу може не вдатись, і це не втратить заявку.",
         size=8.6, leading=11.5,
     )
-    s.text(s.W - M, 76, "аркуш 1 / 2", font="Mono", size=8, color=SLATE, align="right")
+    s.text(s.W - M, 76, "аркуш 1 / 3", font="Mono", size=8, color=SLATE, align="right")
 
     # ---- головний тракт ----
     top = 150
@@ -444,11 +473,11 @@ def page_schema(s: Sheet) -> None:
     s.eyebrow(M, 46, "myapp · схема системи", color=TEAL)
     s.text(M, 76, "Заявка в базі даних", font="Sans-Bold", size=25, color=INK)
     s.wrap(M, 96, 620,
-           "Одна таблиця applications, 13 колонок. Стовпець «сайт» показує, чи "
-           "потрапляє поле у публічну відповідь API — решта доступна лише за "
-           "адмін-токеном X-Admin-Token.",
+           "Центральна таблиця — applications, 13 колонок. Стовпець «сайт» "
+           "показує, чи потрапляє поле у публічну відповідь API; решта доступна "
+           "лише за адмін-токеном X-Admin-Token. Решта таблиць — на аркуші 3.",
            size=8.6, leading=11.5)
-    s.text(s.W - M, 76, "аркуш 2 / 2", font="Mono", size=8, color=SLATE, align="right")
+    s.text(s.W - M, 76, "аркуш 2 / 3", font="Mono", size=8, color=SLATE, align="right")
 
     # ---- таблиця-сутність ----
     tx, tw = M, 700
@@ -555,6 +584,100 @@ def page_schema(s: Sheet) -> None:
            font="Mono", size=7, color=SLATE)
 
 
+ORG_TABLES = {
+    "company": [
+        ("id", "INTEGER", "PK"),
+        ("name", "TEXT NOT NULL", ""),
+        ("tax_id", "TEXT NOT NULL", "UQ"),
+        ("address", "TEXT NOT NULL", ""),
+    ],
+    "positions": [
+        ("id", "INTEGER", "PK"),
+        ("position", "TEXT NOT NULL", "UQ"),
+    ],
+    "roles": [
+        ("id", "INTEGER", "PK"),
+        ("role", "TEXT NOT NULL", "UQ"),
+    ],
+    "employees": [
+        ("id", "INTEGER", "PK"),
+        ("tg_id", "BIGINT NOT NULL", "UQ"),
+        ("company_id", "INTEGER NOT NULL", "FK"),
+        ("fullname", "TEXT NOT NULL", ""),
+        ("phone_number", "TEXT NOT NULL", ""),
+        ("position_id", "INTEGER NOT NULL", "FK"),
+        ("role_id", "INTEGER NOT NULL", "FK"),
+    ],
+}
+
+
+def page_organization(s: Sheet) -> None:
+    s.background()
+    M = 40
+
+    s.eyebrow(M, 46, "myapp · схема системи", color=TEAL)
+    s.text(M, 76, "Компанії та співробітники", font="Sans-Bold", size=25, color=INK)
+    s.wrap(M, 96, 660,
+           "Чотири таблиці: одна довідкова структура організації плюс два "
+           "довідники. Employees посилається на всі три; заявки (аркуш 2) поки "
+           "з ними не зв'язані.",
+           size=8.6, leading=11.5)
+    s.text(s.W - M, 76, "аркуш 3 / 3", font="Mono", size=8, color=SLATE, align="right")
+
+    left_x, left_w = M, 330
+    right_x, right_w = 620, 380
+
+    ty = s.section(left_x, 150, left_w, "довідники")
+    bottoms = {}
+    cursor = ty
+    for name in ("company", "positions", "roles"):
+        cursor, anchors = s.entity(left_x, cursor, left_w, name, ORG_TABLES[name])
+        bottoms[name] = anchors
+        cursor += 26
+
+    s.section(right_x, 150, right_w, "співробітники")
+    _, emp_anchors = s.entity(
+        right_x, ty, right_w, "employees", ORG_TABLES["employees"], accent=RUST
+    )
+
+    # Стрілки від FK-колонок employees до відповідних таблиць.
+    for column, target in (
+        ("company_id", "company"),
+        ("position_id", "positions"),
+        ("role_id", "roles"),
+    ):
+        from_ty = emp_anchors[column]
+        to_ty = bottoms[target]["id"]
+        s.line(right_x, from_ty, right_x - 30, from_ty, color=TEAL, width=1.2)
+        s.line(right_x - 30, from_ty, right_x - 30, to_ty, color=TEAL, width=1.2)
+        s.arrow(right_x - 30, to_ty, left_x + left_w, to_ty, color=TEAL, width=1.2,
+                head=5)
+
+    note_ty = 620
+    s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
+    s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
+    s.wrap(M + 12, note_ty + 18, s.W - 2 * M - 24,
+           "У SQLite перевірка зовнішніх ключів за замовчуванням ВИМКНЕНА: без "
+           "PRAGMA foreign_keys=ON посилання на неіснуючий рядок пройшло б мовчки. "
+           "Застосунок вмикає її на кожному підключенні (app/db.py), і тести це "
+           "перевіряють — див. tests/test_organization.py.",
+           size=8, leading=10.5, color=AMBER)
+
+    ty2 = s.section(M, 700, s.W - 2 * M, "відхилення від вихідного ddl")
+    s.wrap(M, ty2 + 10, s.W - 2 * M,
+           "tg_id оголошено BIGINT, а не INTEGER. У SQLite різниці немає — там "
+           "INTEGER і так 64-бітний. Але в PostgreSQL INTEGER 32-бітний, і "
+           "Telegram-id у нього не вміщується; перехід на Postgres закладений у "
+           "плани, тому тип узято з запасом. Та сама причина, що й для "
+           "applications.telegram_user_id.",
+           size=8, leading=10.5)
+
+    s.line(M, s.H - 34, s.W - M, s.H - 34, color=LINE, width=0.6)
+    s.text(M, s.H - 22,
+           "positions і roles — порожні довідники: рядки в них ще не заведені.",
+           font="Mono", size=7, color=SLATE)
+
+
 def main() -> None:
     register_fonts()
 
@@ -571,6 +694,8 @@ def main() -> None:
     page_route(sheet)
     c.showPage()
     page_schema(sheet)
+    c.showPage()
+    page_organization(sheet)
     c.showPage()
     c.save()
 

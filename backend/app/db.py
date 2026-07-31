@@ -27,8 +27,11 @@ def _apply_sqlite_pragmas(engine: AsyncEngine) -> None:
         cursor.close()
 
 
-def create_engine(database_url: str) -> AsyncEngine:
-    engine = create_async_engine(database_url, future=True)
+def create_engine(database_url: str, **kwargs) -> AsyncEngine:
+    """**kwargs потрібні тестам (StaticPool, connect_args), і саме тому вони
+    ходять сюди, а не створюють engine самі: інакше тестова БД лишалась би
+    без PRAGMA foreign_keys і не перевіряла б зовнішні ключі взагалі."""
+    engine = create_async_engine(database_url, future=True, **kwargs)
     if database_url.startswith("sqlite"):
         _apply_sqlite_pragmas(engine)
     return engine

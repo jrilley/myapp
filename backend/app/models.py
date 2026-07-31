@@ -1,8 +1,18 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Index, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
@@ -112,3 +122,93 @@ class Application(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Application id={self.id} status={self.status} category={self.category!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Компанії, довідники та співробітники
+# ---------------------------------------------------------------------------
+
+
+class Company(Base):
+    """Компанія, до якої належать співробітники."""
+
+    __tablename__ = "company"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, doc="Назва компанії.")
+    tax_id: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True, doc="Податковий номер, унікальний."
+    )
+    address: Mapped[str] = mapped_column(Text, nullable=False, doc="Адреса компанії.")
+
+    employees: Mapped[list["Employee"]] = relationship(back_populates="company")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Company id={self.id} name={self.name!r}>"
+
+
+class Position(Base):
+    """Довідник посад."""
+
+    __tablename__ = "positions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    position: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True, doc="Назва посади, унікальна."
+    )
+
+    employees: Mapped[list["Employee"]] = relationship(back_populates="position")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Position id={self.id} position={self.position!r}>"
+
+
+class Role(Base):
+    """Довідник ролей доступу."""
+
+    __tablename__ = "roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True, doc="Назва ролі, унікальна."
+    )
+
+    employees: Mapped[list["Employee"]] = relationship(back_populates="role")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Role id={self.id} role={self.role!r}>"
+
+
+class Employee(Base):
+    """Співробітник компанії, ідентифікований за Telegram-акаунтом."""
+
+    __tablename__ = "employees"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # BigInteger, а не INTEGER зі схеми: у SQLite INTEGER і так 64-бітний, але
+    # в PostgreSQL він 32-бітний, і Telegram-id туди не влізе. Та сама причина,
+    # що й для applications.telegram_user_id.
+    tg_id: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, unique=True, doc="Telegram user id, унікальний."
+    )
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("company.id"), nullable=False, doc="Компанія співробітника."
+    )
+    fullname: Mapped[str] = mapped_column(Text, nullable=False, doc="ПІБ співробітника.")
+    phone_number: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Номер телефону."
+    )
+    position_id: Mapped[int] = mapped_column(
+        ForeignKey("positions.id"), nullable=False, doc="Посада з довідника positions."
+    )
+    role_id: Mapped[int] = mapped_column(
+        ForeignKey("roles.id"), nullable=False, doc="Роль доступу з довідника roles."
+    )
+
+    company: Mapped["Company"] = relationship(back_populates="employees")
+    position: Mapped["Position"] = relationship(back_populates="employees")
+    role: Mapped["Role"] = relationship(back_populates="employees")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Employee id={self.id} tg_id={self.tg_id} fullname={self.fullname!r}>"

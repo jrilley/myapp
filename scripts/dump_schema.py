@@ -25,7 +25,7 @@ from typing import Any
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
 sys.path.insert(0, str(BACKEND))
 
-from sqlalchemy import Table  # noqa: E402
+from sqlalchemy import ForeignKeyConstraint, Table, UniqueConstraint  # noqa: E402
 from sqlalchemy.dialects import postgresql, sqlite as sqlite_dialect  # noqa: E402
 from sqlalchemy.schema import Column  # noqa: E402
 
@@ -102,12 +102,39 @@ def _column_dict(column: Column) -> dict[str, Any]:
         "default": _default(column),
         "server_default": _server_default(column),
         "on_update": _on_update(column),
+        "unique": bool(column.unique),
+        "references": next(
+            (fk.target_fullname for fk in sorted(column.foreign_keys, key=str)), None
+        ),
         "description": column.doc,
     }
     enums = getattr(column.type, "enums", None)
     if enums:
         data["enum_values"] = list(enums)
     return data
+
+
+def _foreign_keys(table: Table) -> list[dict[str, Any]]:
+    constraints = [
+        c for c in table.constraints if isinstance(c, ForeignKeyConstraint)
+    ]
+    return sorted(
+        (
+            {
+                "columns": list(c.column_keys),
+                "references": [e.target_fullname for e in c.elements],
+                "on_delete": c.ondelete,
+                "on_update": c.onupdate,
+            }
+            for c in constraints
+        ),
+        key=lambda f: f["columns"],
+    )
+
+
+def _unique_constraints(table: Table) -> list[list[str]]:
+    constraints = [c for c in table.constraints if isinstance(c, UniqueConstraint)]
+    return sorted(([col.name for col in c.columns] for c in constraints))
 
 
 def _indexes(table: Table) -> list[dict[str, Any]]:
@@ -180,6 +207,8 @@ def build() -> dict[str, Any]:
             "description": descriptions.get(table.name),
             "primary_key": list(table.primary_key.columns.keys()),
             "columns": [_column_dict(c) for c in table.columns],
+            "unique_constraints": _unique_constraints(table),
+            "foreign_keys": _foreign_keys(table),
             "indexes": _indexes(table),
         }
 

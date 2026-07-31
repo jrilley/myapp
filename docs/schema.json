@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "5c6dd5b62690",
+  "alembic_head": "6a0399695822",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -36,6 +36,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Номер заявки. Його бачить користувач у «#N» і передає в /delete."
         },
         {
@@ -52,6 +54,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Автор заявки. BigInteger обов'язково: Telegram id не вміщується в int32."
         },
         {
@@ -68,6 +72,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "@username автора, якщо він є — у Telegram він не обов'язковий."
         },
         {
@@ -84,6 +90,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Крок 1 анкети: ПІБ."
         },
         {
@@ -100,6 +108,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Крок 2 анкети. Публічний за рішенням замовника — бот попереджає."
         },
         {
@@ -116,6 +126,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Крок 3 анкети, значення з фіксованого списку app/bot/constants.py."
         },
         {
@@ -132,6 +144,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Крок 4 анкети. Text, а не String: довжину обмежує бот, не схема."
         },
         {
@@ -148,6 +162,8 @@
           "default": "published",
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Модерації немає, тому при створенні завжди published.",
           "enum_values": [
             "pending",
@@ -170,6 +186,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Куди опубліковано. Порожнє, якщо публікація не вдалася."
         },
         {
@@ -186,6 +204,8 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Без нього неможливо прибрати повідомлення з групи при видаленні."
         },
         {
@@ -202,6 +222,8 @@
           "default": null,
           "server_default": "now()",
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Проставляє БД. За ним сортується список на сайті."
         },
         {
@@ -218,6 +240,8 @@
           "default": null,
           "server_default": "now()",
           "on_update": "now()",
+          "unique": false,
+          "references": null,
           "description": "Оновлюється автоматично при кожній зміні рядка."
         },
         {
@@ -234,9 +258,13 @@
           "default": null,
           "server_default": null,
           "on_update": null,
+          "unique": false,
+          "references": null,
           "description": "Мітка м'якого видалення; NULL = заявка жива. Рядок не стирається: заявки — персональні дані й історія звернень."
         }
       ],
+      "unique_constraints": [],
+      "foreign_keys": [],
       "indexes": [
         {
           "name": "ix_applications_category",
@@ -268,6 +296,367 @@
           "unique": false
         }
       ]
+    },
+    "company": {
+      "description": "Компанія, до якої належать співробітники.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "name",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Назва компанії."
+        },
+        {
+          "name": "tax_id",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": true,
+          "references": null,
+          "description": "Податковий номер, унікальний."
+        },
+        {
+          "name": "address",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Адреса компанії."
+        }
+      ],
+      "unique_constraints": [
+        [
+          "tax_id"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": []
+    },
+    "positions": {
+      "description": "Довідник посад.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "position",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": true,
+          "references": null,
+          "description": "Назва посади, унікальна."
+        }
+      ],
+      "unique_constraints": [
+        [
+          "position"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": []
+    },
+    "roles": {
+      "description": "Довідник ролей доступу.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "role",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": true,
+          "references": null,
+          "description": "Назва ролі, унікальна."
+        }
+      ],
+      "unique_constraints": [
+        [
+          "role"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": []
+    },
+    "employees": {
+      "description": "Співробітник компанії, ідентифікований за Telegram-акаунтом.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "tg_id",
+          "type": {
+            "generic": "BIGINT",
+            "sqlite": "BIGINT",
+            "postgresql": "BIGINT"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": true,
+          "references": null,
+          "description": "Telegram user id, унікальний."
+        },
+        {
+          "name": "company_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "company.id",
+          "description": "Компанія співробітника."
+        },
+        {
+          "name": "fullname",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "ПІБ співробітника."
+        },
+        {
+          "name": "phone_number",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Номер телефону."
+        },
+        {
+          "name": "position_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "positions.id",
+          "description": "Посада з довідника positions."
+        },
+        {
+          "name": "role_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "roles.id",
+          "description": "Роль доступу з довідника roles."
+        }
+      ],
+      "unique_constraints": [
+        [
+          "tg_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "company_id"
+          ],
+          "references": [
+            "company.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
+            "position_id"
+          ],
+          "references": [
+            "positions.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
+            "role_id"
+          ],
+          "references": [
+            "roles.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        }
+      ],
+      "indexes": []
     }
   },
   "managed_by_alembic": {
