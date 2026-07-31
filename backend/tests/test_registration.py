@@ -23,9 +23,20 @@ from app.bot.handlers.registration import (
     step_confirm,
     step_fullname,
     step_phone,
+    step_phone2,
+    step_phone2_no,
+    step_phone2_yes,
+    step_phone_shared,
     step_position,
 )
-from app.bot.keyboards import FORM_CANCEL, REG_COMPANY_PREFIX, REG_POSITION_PREFIX
+from app.bot.keyboards import (
+    CANCEL_TEXT,
+    FORM_CANCEL,
+    REG_COMPANY_PREFIX,
+    REG_PHONE2_NO,
+    REG_PHONE2_YES,
+    REG_POSITION_PREFIX,
+)
 from app.bot.states import CompanyForm, Registration
 from app.models import Company, Position, Role
 from tests.conftest import (
@@ -33,6 +44,7 @@ from tests.conftest import (
     OWNER_ID,
     STRANGER_ID,
     FakeCallback,
+    FakeContact,
     FakeMessage,
     FakeUser,
     callback_data,
@@ -64,9 +76,14 @@ async def reference_data(session):
     return company, position
 
 
-async def _walk_through(state, session, company, position):
+async def _walk_through(state, session, company, position, *, second_phone=None):
     await step_fullname(FakeMessage("Олена Ковальчук"), state)
-    await step_phone(FakeMessage("+380671112233"), state, session)
+    await step_phone(FakeMessage("+380671112233"), state)
+    if second_phone is None:
+        await step_phone2_no(FakeCallback(REG_PHONE2_NO), state, session)
+    else:
+        await step_phone2_yes(FakeCallback(REG_PHONE2_YES), state)
+        await step_phone2(FakeMessage(second_phone), state, session)
     await step_company(
         FakeCallback(f"{REG_COMPANY_PREFIX}:{company.id}"), state, session
     )
@@ -183,12 +200,105 @@ async def test_short_fullname_keeps_state(state):
 
 
 async def test_company_step_offers_cancel(session, state, reference_data):
+    await state.set_state(Registration.phone2_ask)
+    callback = FakeCallback(REG_PHONE2_NO)
+
+    await step_phone2_no(callback, state, session)
+
+    assert callback_data(callback.message.markups[0])[-1] == FORM_CANCEL
+
+
+# ---------------------------------------------------------------------------
+# Номер телефону
+# ---------------------------------------------------------------------------
+
+
+async def test_shared_contact_is_accepted(session, state, reference_data):
+    """Основний шлях: користувач тисне «Поділитися номером»."""
     await state.set_state(Registration.phone)
-    message = FakeMessage("+380671112233")
+    message = FakeMessage(
+        contact=FakeContact("+380671112233", user_id=STRANGER_ID),
+        user=FakeUser(STRANGER_ID),
+    )
 
-    await step_phone(message, state, session)
+    await step_phone_shared(message, state)
 
-    assert callback_data(message.markups[0])[-1] == FORM_CANCEL
+    assert (await state.get_data())["phone_number"] == "+380671112233"
+    assert await state.get_state() == Registration.phone2_ask
+
+
+async def test_someone_elses_contact_is_refused(session, state, reference_data):
+    """Telegram дозволяє надіслати чужий контакт зі списку — це не наш номер."""
+    await state.set_state(Registration.phone)
+    message = FakeMessage(
+        contact=FakeContact("+380990000000", user_id=999999),
+        user=FakeUser(STRANGER_ID),
+    )
+
+    await step_phone_shared(message, state)
+
+    assert "phone_number" not in await state.get_data()
+    assert await state.get_state() == Registration.phone
+    assert "іншої людини" in message.answers[0]
+
+
+async def test_phone_can_still_be_typed(session, state, reference_data):
+    await state.set_state(Registration.phone)
+
+    await step_phone(FakeMessage("+380671112233"), state)
+
+    assert (await state.get_data())["phone_number"] == "+380671112233"
+    assert await state.get_state() == Registration.phone2_ask
+
+
+async def test_reply_cancel_button_stops_registration(session, state, reference_data):
+    """Reply-клавіатура не має callback_data, тому скасування — за текстом."""
+    await state.set_state(Registration.phone)
+    message = FakeMessage(CANCEL_TEXT)
+
+    await step_phone(message, state)
+
+    assert await state.get_state() is None
+    assert "скасовано" in message.answers[0]
+
+
+async def test_second_phone_is_stored(session, state, access_guest, reference_data):
+    company, position = reference_data
+    await on_register(FakeCallback("reg:start"), state, session, access_guest)
+    await _walk_through(
+        state, session, company, position, second_phone="+380509998877"
+    )
+    await step_confirm(
+        FakeCallback("reg:confirm", user=FakeUser(STRANGER_ID)),
+        state, session, access_guest,
+    )
+
+    employee = await repository.get_employee_by_tg_id(session, STRANGER_ID)
+    assert employee.phone_number == "+380671112233"
+    assert employee.phone_number2 == "+380509998877"
+
+
+async def test_second_phone_is_optional(session, state, access_guest, reference_data):
+    company, position = reference_data
+    await on_register(FakeCallback("reg:start"), state, session, access_guest)
+    await _walk_through(state, session, company, position)
+    await step_confirm(
+        FakeCallback("reg:confirm", user=FakeUser(STRANGER_ID)),
+        state, session, access_guest,
+    )
+
+    employee = await repository.get_employee_by_tg_id(session, STRANGER_ID)
+    assert employee.phone_number2 is None
+
+
+async def test_short_second_phone_keeps_state(session, state, reference_data):
+    await state.set_state(Registration.phone2)
+    message = FakeMessage("12")
+
+    await step_phone2(message, state, session)
+
+    assert await state.get_state() == Registration.phone2
+    assert "Номер має бути" in message.answers[0]
 
 
 # ---------------------------------------------------------------------------

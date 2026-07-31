@@ -14,6 +14,7 @@ from app.bot.access import ROLE_COMPANY_ADMIN, ROLE_MAIN_ADMIN, ROLE_USER
 from app.bot.handlers.management import (
     edit_fullname,
     edit_phone,
+    edit_phone2,
     on_employee_card,
     on_employee_edit,
     on_employee_set,
@@ -187,6 +188,44 @@ async def test_short_fullname_keeps_state(session, state, access_admin, employee
 
     assert await state.get_state() == EmployeeEdit.fullname
     assert "від 2 до" in message.answers[0]
+
+
+async def test_card_shows_second_phone_only_when_present(
+    session, state, access_admin, employee
+):
+    first = FakeCallback(f"{EMP_VIEW_PREFIX}:{employee.id}", user=FakeUser(ADMIN_ID))
+    await on_employee_card(first, state, session, access_admin)
+    assert "Додатковий" not in first.message.answers[0]
+
+    await repository.update_employee(session, employee, phone_number2="+380509998877")
+    second = FakeCallback(f"{EMP_VIEW_PREFIX}:{employee.id}", user=FakeUser(ADMIN_ID))
+    await on_employee_card(second, state, session, access_admin)
+
+    assert "+380509998877" in second.message.answers[0]
+
+
+async def test_editing_second_phone_updates_the_row(
+    session, state, access_admin, employee
+):
+    await state.set_state(EmployeeEdit.phone2)
+    await state.update_data(employee_id=employee.id)
+
+    await edit_phone2(FakeMessage("+380509998877"), state, session)
+
+    updated = await repository.get_employee(session, employee.id)
+    assert updated.phone_number2 == "+380509998877"
+
+
+async def test_second_phone_can_be_cleared(session, state, access_admin, employee):
+    """Поле необов'язкове, тож має бути спосіб його прибрати."""
+    await repository.update_employee(session, employee, phone_number2="+380509998877")
+    await state.set_state(EmployeeEdit.phone2)
+    await state.update_data(employee_id=employee.id)
+
+    await edit_phone2(FakeMessage("-"), state, session)
+
+    updated = await repository.get_employee(session, employee.id)
+    assert updated.phone_number2 is None
 
 
 async def test_editing_phone_updates_the_row(session, state, access_admin, employee):

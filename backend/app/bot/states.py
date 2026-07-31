@@ -17,6 +17,8 @@ class Registration(StatesGroup):
 
     fullname = State()
     phone = State()
+    phone2_ask = State()
+    phone2 = State()
     company = State()
     position = State()
     confirm = State()
@@ -37,6 +39,7 @@ class EmployeeEdit(StatesGroup):
 
     fullname = State()
     phone = State()
+    phone2 = State()
 
 
 class PositionForm(StatesGroup):

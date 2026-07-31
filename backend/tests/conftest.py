@@ -23,12 +23,27 @@ class FakeUser:
         self.username = username
 
 
+class FakeContact:
+    """Те, що Telegram присилає після кнопки «Поділитися номером».
+    user_id збігається з відправником лише для власного контакту."""
+
+    def __init__(self, phone_number: str, user_id: int = OWNER_ID):
+        self.phone_number = phone_number
+        self.user_id = user_id
+
+
 class FakeMessage:
     """Мінімальний двійник aiogram.types.Message — рівно ті методи,
     які викликають хендлери."""
 
-    def __init__(self, text: str | None = None, user: FakeUser | None = None):
+    def __init__(
+        self,
+        text: str | None = None,
+        user: FakeUser | None = None,
+        contact: FakeContact | None = None,
+    ):
         self.text = text
+        self.contact = contact
         self.from_user = user or FakeUser()
         self.answers: list[str] = []
         self.edits: list[str] = []

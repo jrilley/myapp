@@ -7,7 +7,7 @@
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
@@ -22,16 +22,21 @@ from app.bot.constants import (
     MIN_PHONE,
 )
 from app.bot.keyboards import (
+    CANCEL_TEXT,
     COMPANY_ADD,
     MENU_COMPANIES,
     REG_COMPANY_PREFIX,
     REG_CONFIRM,
+    REG_PHONE2_NO,
+    REG_PHONE2_YES,
     REG_POSITION_PREFIX,
     REG_START,
     cancel_keyboard,
     choices_keyboard,
     main_menu_keyboard,
+    phone2_keyboard,
     registration_confirm_keyboard,
+    share_phone_keyboard,
 )
 from app.bot.states import CompanyForm, Registration
 
@@ -96,11 +101,89 @@ async def step_fullname(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(fullname=value)
     await state.set_state(Registration.phone)
-    await message.answer("Ваш номер телефону:", reply_markup=cancel_keyboard())
+    await message.answer(
+        "Поділіться номером телефону — натисніть кнопку нижче.\n"
+        "Можна також ввести номер вручну.",
+        reply_markup=share_phone_keyboard(),
+    )
+
+
+async def _ask_about_second_phone(message: Message, state: FSMContext) -> None:
+    await state.set_state(Registration.phone2_ask)
+    # Reply-клавіатуру треба прибрати явно, інакше кнопка «Поділитися
+    # номером» лишиться висіти під полем вводу до кінця анкети.
+    await message.answer("Номер збережено.", reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "Чи є у вас додатковий номер?", reply_markup=phone2_keyboard()
+    )
+
+
+@router.message(Registration.phone, F.contact)
+async def step_phone_shared(message: Message, state: FSMContext) -> None:
+    """Номер, отриманий кнопкою. Telegram дозволяє надіслати й чужий контакт
+    (вибравши його зі списку), тому звіряємо, що це справді власний."""
+    contact = message.contact
+    if contact.user_id != message.from_user.id:
+        await message.answer(
+            "Це контакт іншої людини. Поділіться, будь ласка, власним номером "
+            "або введіть його вручну.",
+            reply_markup=share_phone_keyboard(),
+        )
+        return
+
+    await state.update_data(phone_number=contact.phone_number)
+    await _ask_about_second_phone(message, state)
 
 
 @router.message(Registration.phone, F.text)
-async def step_phone(
+async def step_phone(message: Message, state: FSMContext) -> None:
+    value = (message.text or "").strip()
+    if value == CANCEL_TEXT:
+        await state.clear()
+        await message.answer("Реєстрацію скасовано.", reply_markup=ReplyKeyboardRemove())
+        return
+    if not MIN_PHONE <= len(value) <= MAX_PHONE:
+        await message.answer(
+            f"Номер має бути від {MIN_PHONE} до {MAX_PHONE} символів. Спробуйте ще раз.",
+            reply_markup=share_phone_keyboard(),
+        )
+        return
+    await state.update_data(phone_number=value)
+    await _ask_about_second_phone(message, state)
+
+
+@router.callback_query(Registration.phone2_ask, F.data == REG_PHONE2_YES)
+async def step_phone2_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(Registration.phone2)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Введіть додатковий номер:", reply_markup=cancel_keyboard()
+        )
+
+
+async def _ask_company(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    await state.set_state(Registration.company)
+    companies = await repository.list_companies(session)
+    await message.answer(
+        "Оберіть компанію:",
+        reply_markup=choices_keyboard(
+            REG_COMPANY_PREFIX, [(c.id, c.name) for c in companies]
+        ),
+    )
+
+
+@router.callback_query(Registration.phone2_ask, F.data == REG_PHONE2_NO)
+async def step_phone2_no(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await _ask_company(callback.message, state, session)
+
+
+@router.message(Registration.phone2, F.text)
+async def step_phone2(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
     value = (message.text or "").strip()
@@ -110,16 +193,8 @@ async def step_phone(
             reply_markup=cancel_keyboard(),
         )
         return
-    await state.update_data(phone_number=value)
-    await state.set_state(Registration.company)
-
-    companies = await repository.list_companies(session)
-    await message.answer(
-        "Оберіть компанію:",
-        reply_markup=choices_keyboard(
-            REG_COMPANY_PREFIX, [(c.id, c.name) for c in companies]
-        ),
-    )
+    await state.update_data(phone_number2=value)
+    await _ask_company(message, state, session)
 
 
 @router.callback_query(Registration.company, F.data.startswith(f"{REG_COMPANY_PREFIX}:"))
@@ -166,12 +241,14 @@ async def step_position(
     await callback.answer()
 
     data = await state.get_data()
+    extra = data.get("phone_number2")
     if callback.message is not None:
         await callback.message.answer(
             "<b>Перевірте дані:</b>\n\n"
             f"<b>ПІБ:</b> {data['fullname']}\n"
             f"<b>Телефон:</b> {data['phone_number']}\n"
-            f"<b>Компанія:</b> {data['company_name']}\n"
+            + (f"<b>Додатковий:</b> {extra}\n" if extra else "")
+            + f"<b>Компанія:</b> {data['company_name']}\n"
             f"<b>Посада:</b> {data['position_name']}",
             reply_markup=registration_confirm_keyboard(),
         )
@@ -212,6 +289,7 @@ async def step_confirm(
         company_id=data["company_id"],
         fullname=data["fullname"],
         phone_number=data["phone_number"],
+        phone_number2=data.get("phone_number2"),
         position_id=data["position_id"],
         role_id=role.id,
     )

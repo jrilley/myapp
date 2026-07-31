@@ -1,6 +1,11 @@
 from collections.abc import Sequence
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.constants import CATEGORIES
@@ -71,6 +76,38 @@ REG_START = "reg:start"
 REG_COMPANY_PREFIX = "reg:company"
 REG_POSITION_PREFIX = "reg:position"
 REG_CONFIRM = "reg:confirm"
+REG_PHONE2_YES = "reg:phone2:yes"
+REG_PHONE2_NO = "reg:phone2:no"
+
+#: Текст reply-кнопки скасування. Reply-клавіатура не має callback_data,
+#: тому розпізнаємо її за текстом.
+CANCEL_TEXT = "✖️ Скасувати"
+
+
+def share_phone_keyboard() -> ReplyKeyboardMarkup:
+    """Reply-клавіатура: інакше Telegram не віддасть номер.
+
+    request_contact працює лише в приватному чаті й повертає номер САМОГО
+    користувача. Поруч — скасування, бо інлайн-кнопку до цього повідомлення
+    прикріпити не можна: розмітка або inline, або reply.
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📱 Поділитися номером", request_contact=True)],
+            [KeyboardButton(text=CANCEL_TEXT)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="або введіть номер вручну",
+    )
+
+
+def phone2_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Так, додати", callback_data=REG_PHONE2_YES)
+    builder.button(text="Ні, продовжити", callback_data=REG_PHONE2_NO)
+    builder.adjust(1)
+    return builder.as_markup()
 
 COMPANY_ADD = "company:add"
 
@@ -169,6 +206,7 @@ def employee_card_keyboard(employee_id: int) -> InlineKeyboardMarkup:
     for field, title in (
         ("name", "✏️ ПІБ"),
         ("phone", "✏️ Телефон"),
+        ("phone2", "✏️ Дод. номер"),
         ("company", "🏢 Компанія"),
         ("position", "💼 Посада"),
         ("role", "🔑 Роль"),
@@ -177,7 +215,7 @@ def employee_card_keyboard(employee_id: int) -> InlineKeyboardMarkup:
             text=title, callback_data=f"{EMP_EDIT_PREFIX}:{field}:{employee_id}"
         )
     builder.button(text="⬅️ До списку", callback_data=MENU_EMPLOYEES)
-    builder.adjust(2, 2, 1, 1)
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup()
 
 

@@ -168,12 +168,14 @@ async def create_employee(
     phone_number: str,
     position_id: int,
     role_id: int,
+    phone_number2: str | None = None,
 ) -> Employee:
     employee = Employee(
         tg_id=tg_id,
         company_id=company_id,
         fullname=fullname,
         phone_number=phone_number,
+        phone_number2=phone_number2,
         position_id=position_id,
         role_id=role_id,
     )

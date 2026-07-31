@@ -609,6 +609,7 @@ ORG_TABLES = {
         ("company_id", "INTEGER NOT NULL", "FK"),
         ("fullname", "TEXT NOT NULL", ""),
         ("phone_number", "TEXT NOT NULL", ""),
+        ("phone_number2", "TEXT", ""),
         ("position_id", "INTEGER NOT NULL", "FK"),
         ("role_id", "INTEGER NOT NULL", "FK"),
     ],
@@ -622,8 +623,9 @@ def page_organization(s: Sheet) -> None:
     s.eyebrow(M, 46, "myapp · схема системи", color=TEAL)
     s.text(M, 76, "Компанії та співробітники", font="Sans-Bold", size=25, color=INK)
     s.wrap(M, 96, 660,
-           "Реєстрація в боті створює рядок у employees: ПІБ, телефон, компанія "
-           "та посада з довідників. Роль нового користувача — «Користувач». "
+           "Реєстрація в боті створює рядок у employees: ПІБ, номер телефону "
+           "(кнопкою «Поділитися номером»), необов'язковий другий номер, "
+           "компанія та посада з довідників. Роль нового — «Користувач». "
            "Заявку може подати лише зареєстрований; із заявками (аркуш 2) ці "
            "таблиці поки не пов'язані.",
            size=8.6, leading=11.5)

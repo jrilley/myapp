@@ -49,10 +49,12 @@ async def _deny(callback: CallbackQuery, access: Access) -> bool:
 
 
 def _card(employee: Employee) -> str:
+    extra = employee.phone_number2
     return (
         f"<b>{escape(employee.fullname)}</b>\n\n"
         f"<b>Телефон:</b> {escape(employee.phone_number)}\n"
-        f"<b>Компанія:</b> {escape(employee.company.name)}\n"
+        + (f"<b>Додатковий:</b> {escape(extra)}\n" if extra else "")
+        + f"<b>Компанія:</b> {escape(employee.company.name)}\n"
         f"<b>Посада:</b> {escape(employee.position.position)}\n"
         f"<b>Роль:</b> {escape(employee.role.role)}\n"
         f"<b>Telegram id:</b> <code>{employee.tg_id}</code>"
@@ -126,12 +128,18 @@ async def on_employee_edit(
     if callback.message is None:
         return
 
-    if field in ("name", "phone"):
-        await state.set_state(
-            EmployeeEdit.fullname if field == "name" else EmployeeEdit.phone
-        )
+    text_fields = {
+        "name": (EmployeeEdit.fullname, "Новий ПІБ:"),
+        "phone": (EmployeeEdit.phone, "Новий номер телефону:"),
+        "phone2": (
+            EmployeeEdit.phone2,
+            "Новий додатковий номер (надішліть «-», щоб прибрати):",
+        ),
+    }
+    if field in text_fields:
+        next_state, prompt = text_fields[field]
+        await state.set_state(next_state)
         await state.update_data(employee_id=employee_id)
-        prompt = "Новий ПІБ:" if field == "name" else "Новий номер телефону:"
         await callback.message.answer(prompt, reply_markup=cancel_keyboard())
         return
 
@@ -239,6 +247,33 @@ async def edit_phone(
     await _show_card(message, session, employee.id)
 
 
+@router.message(EmployeeEdit.phone2, F.text)
+async def edit_phone2(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    # Додатковий номер необов'язковий, тому потрібен спосіб його прибрати.
+    cleared = value == "-"
+    if not cleared and not MIN_PHONE <= len(value) <= MAX_PHONE:
+        await message.answer(
+            f"Номер має бути від {MIN_PHONE} до {MAX_PHONE} символів "
+            "або «-», щоб прибрати.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    data = await state.get_data()
+    await state.clear()
+
+    employee = await repository.get_employee(session, data["employee_id"])
+    if employee is None:
+        await message.answer("Співробітника не знайдено.")
+        return
+    await repository.update_employee(
+        session, employee, phone_number2=None if cleared else value
+    )
+    await _show_card(message, session, employee.id)
+
+
 # ---------------------------------------------------------------------------
 # Посади
 # ---------------------------------------------------------------------------
@@ -301,6 +336,7 @@ async def position_name(
 
 @router.message(EmployeeEdit.fullname)
 @router.message(EmployeeEdit.phone)
+@router.message(EmployeeEdit.phone2)
 @router.message(PositionForm.name)
 async def non_text(message: Message) -> None:
     await message.answer(

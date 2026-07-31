@@ -197,7 +197,13 @@ class Employee(Base):
     )
     fullname: Mapped[str] = mapped_column(Text, nullable=False, doc="ПІБ співробітника.")
     phone_number: Mapped[str] = mapped_column(
-        Text, nullable=False, doc="Номер телефону."
+        Text,
+        nullable=False,
+        doc="Основний номер. Зазвичай отриманий кнопкою «Поділитися номером».",
+    )
+    phone_number2: Mapped[str | None] = mapped_column(
+        Text,
+        doc="Додатковий номер, якщо користувач його вказав. Необов'язковий.",
     )
     position_id: Mapped[int] = mapped_column(
         ForeignKey("positions.id"), nullable=False, doc="Посада з довідника positions."
