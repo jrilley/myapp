@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
 from app.bot.access import ROLE_USER, Access
+from app.bot.actions import render_companies
 from app.bot.constants import (
     MAX_ADDRESS,
     MAX_COMPANY_NAME,
@@ -22,7 +23,6 @@ from app.bot.constants import (
 )
 from app.bot.keyboards import (
     COMPANY_ADD,
-    FORM_CANCEL,
     MENU_COMPANIES,
     REG_COMPANY_PREFIX,
     REG_CONFIRM,
@@ -30,7 +30,6 @@ from app.bot.keyboards import (
     REG_START,
     cancel_keyboard,
     choices_keyboard,
-    companies_keyboard,
     main_menu_keyboard,
     registration_confirm_keyboard,
 )
@@ -246,14 +245,9 @@ async def on_companies(
     await state.clear()
     await callback.answer()
 
-    companies = await repository.list_companies(session)
-    if companies:
-        body = "\n".join(f"#{c.id} — {c.name} (ЄДРПОУ {c.tax_id})" for c in companies)
-        text = f"<b>Компанії:</b>\n\n{body}"
-    else:
-        text = "Компаній ще немає. Без них ніхто не зможе зареєструватись."
+    text, keyboard = await render_companies(session)
     if callback.message is not None:
-        await callback.message.answer(text, reply_markup=companies_keyboard())
+        await callback.message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == COMPANY_ADD)

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
 from app.bot.access import Access
+from app.bot.actions import render_employees, render_positions
 from app.bot.constants import MAX_FULLNAME, MAX_PHONE, MAX_POSITION, MIN_PHONE
 from app.bot.keyboards import (
     EMP_EDIT_PREFIX,
@@ -24,8 +25,6 @@ from app.bot.keyboards import (
     cancel_keyboard,
     employee_card_keyboard,
     employee_choice_keyboard,
-    employees_keyboard,
-    positions_keyboard,
 )
 from app.bot.states import EmployeeEdit, PositionForm
 from app.models import Employee
@@ -84,16 +83,8 @@ async def on_employees(
     if callback.message is None:
         return
 
-    employees = await repository.list_employees(session)
-    if not employees:
-        await callback.message.answer(
-            "Зареєстрованих користувачів ще немає.", reply_markup=employees_keyboard([])
-        )
-        return
-    await callback.message.answer(
-        f"<b>Користувачі</b> — {len(employees)}\nОберіть, щоб переглянути:",
-        reply_markup=employees_keyboard(employees),
-    )
+    text, keyboard = await render_employees(session)
+    await callback.message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith(f"{EMP_VIEW_PREFIX}:"))
@@ -264,13 +255,8 @@ async def on_positions(
     if callback.message is None:
         return
 
-    positions = await repository.list_positions(session)
-    if positions:
-        body = "\n".join(f"#{p.id} — {escape(p.position)}" for p in positions)
-        text = f"<b>Посади:</b>\n\n{body}"
-    else:
-        text = "Довідник посад порожній."
-    await callback.message.answer(text, reply_markup=positions_keyboard())
+    text, keyboard = await render_positions(session)
+    await callback.message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == POSITION_ADD)
@@ -306,12 +292,10 @@ async def position_name(
 
     await state.clear()
     position = await repository.create_position(session, name=value)
-    positions = await repository.list_positions(session)
-    body = "\n".join(f"#{p.id} — {escape(p.position)}" for p in positions)
+    text, keyboard = await render_positions(session)
     await message.answer(
-        f"✅ Посаду «{escape(position.position)}» додано.\n\n"
-        f"<b>Посади:</b>\n\n{body}",
-        reply_markup=positions_keyboard(),
+        f"✅ Посаду «{escape(position.position)}» додано.\n\n{text}",
+        reply_markup=keyboard,
     )
 
 

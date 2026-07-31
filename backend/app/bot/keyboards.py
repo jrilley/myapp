@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.constants import CATEGORIES
@@ -24,6 +24,45 @@ EMP_VIEW_PREFIX = "emp"
 EMP_EDIT_PREFIX = "empedit"
 EMP_SET_PREFIX = "empset"
 POSITION_ADD = "position:add"
+
+PAGE_PREFIX = "page"
+#: Натискання на «2 / 5» нічого не робить, але Telegram чекає відповіді,
+#: інакше на кнопці лишається годинник.
+NOOP = "noop"
+
+# Розміри сторінок різні: заявки багатослівні, довідники — ні.
+PAGE_APPLICATIONS = 5
+PAGE_EMPLOYEES = 8
+PAGE_REFERENCE = 10
+
+
+def _add_pagination(
+    builder: InlineKeyboardBuilder, kind: str, *, offset: int, limit: int, total: int
+) -> None:
+    """Додає рядок «‹ Назад · 2/5 · Далі ›», якщо сторінка не одна."""
+    if total <= limit:
+        return
+
+    pages = (total + limit - 1) // limit
+    current = offset // limit + 1
+
+    row: list[InlineKeyboardButton] = []
+    if offset > 0:
+        row.append(
+            InlineKeyboardButton(
+                text="‹ Назад",
+                callback_data=f"{PAGE_PREFIX}:{kind}:{max(0, offset - limit)}",
+            )
+        )
+    row.append(InlineKeyboardButton(text=f"{current} / {pages}", callback_data=NOOP))
+    if offset + limit < total:
+        row.append(
+            InlineKeyboardButton(
+                text="Далі ›",
+                callback_data=f"{PAGE_PREFIX}:{kind}:{offset + limit}",
+            )
+        )
+    builder.row(*row)
 
 FORM_CANCEL = "form:cancel"
 DELETE_PREFIX = "del"
@@ -91,15 +130,23 @@ def registration_confirm_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def companies_keyboard() -> InlineKeyboardMarkup:
+def companies_keyboard(
+    *, offset: int = 0, total: int | None = None
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Додати компанію", callback_data=COMPANY_ADD)
-    builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
     builder.adjust(1)
+    if total is not None:
+        _add_pagination(
+            builder, "comp", offset=offset, limit=PAGE_REFERENCE, total=total
+        )
+    builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
     return builder.as_markup()
 
 
-def employees_keyboard(employees) -> InlineKeyboardMarkup:
+def employees_keyboard(
+    employees, *, offset: int = 0, total: int | None = None
+) -> InlineKeyboardMarkup:
     """Список співробітників: кожен — кнопка, що відкриває картку."""
     builder = InlineKeyboardBuilder()
     for employee in employees:
@@ -107,8 +154,12 @@ def employees_keyboard(employees) -> InlineKeyboardMarkup:
             text=f"{employee.fullname} · {employee.role.role}",
             callback_data=f"{EMP_VIEW_PREFIX}:{employee.id}",
         )
-    builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
     builder.adjust(1)
+    if total is not None:
+        _add_pagination(
+            builder, "emp", offset=offset, limit=PAGE_EMPLOYEES, total=total
+        )
+    builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
     return builder.as_markup()
 
 
@@ -145,11 +196,17 @@ def employee_choice_keyboard(field: str, employee_id: int, items) -> InlineKeybo
     return builder.as_markup()
 
 
-def positions_keyboard() -> InlineKeyboardMarkup:
+def positions_keyboard(
+    *, offset: int = 0, total: int | None = None
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Додати посаду", callback_data=POSITION_ADD)
-    builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
     builder.adjust(1)
+    if total is not None:
+        _add_pagination(
+            builder, "pos", offset=offset, limit=PAGE_REFERENCE, total=total
+        )
+    builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
     return builder.as_markup()
 
 
@@ -189,6 +246,10 @@ def after_submit_keyboard() -> InlineKeyboardMarkup:
 
 def applications_keyboard(
     applications: Sequence[Application],
+    *,
+    kind: str = "my",
+    offset: int = 0,
+    total: int | None = None,
 ) -> InlineKeyboardMarkup:
     """Кнопка видалення на кожну заявку — замість того, щоб набирати
     /delete з номером вручну. Використовується і для своїх заявок,
@@ -199,8 +260,12 @@ def applications_keyboard(
             text=f"🗑 #{application.id} · {application.category}",
             callback_data=f"{DELETE_PREFIX}:{application.id}",
         )
-    builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
     builder.adjust(1)
+    if total is not None:
+        _add_pagination(
+            builder, kind, offset=offset, limit=PAGE_APPLICATIONS, total=total
+        )
+    builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
     return builder.as_markup()
 
 

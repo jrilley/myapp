@@ -8,7 +8,10 @@ from app.bot.access import Access
 from app.bot.actions import (
     delete_application,
     render_all_applications,
+    render_companies,
+    render_employees,
     render_own_applications,
+    render_positions,
     render_stats,
 )
 from app.bot.keyboards import (
@@ -18,6 +21,8 @@ from app.bot.keyboards import (
     MENU_HELP,
     MENU_MY,
     MENU_STATS,
+    NOOP,
+    PAGE_PREFIX,
     main_menu_keyboard,
 )
 from app.bot.publisher import Publisher
@@ -165,6 +170,59 @@ async def on_stats(
     text, keyboard = await render_stats(session)
     if callback.message is not None:
         await callback.message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == NOOP)
+async def on_noop(callback: CallbackQuery) -> None:
+    """Лічильник «2 / 5» — не кнопка, але Telegram чекає відповіді."""
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(f"{PAGE_PREFIX}:"))
+async def on_page(
+    callback: CallbackQuery, session: AsyncSession, access: Access
+) -> None:
+    """Гортання будь-якого списку. Права перевіряються тут заново:
+    offset у callback_data можна підмінити, а сам вид списку — підставити."""
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        await callback.answer("Не вдалося погортати", show_alert=True)
+        return
+    _, kind, raw_offset = parts
+    offset = int(raw_offset)
+
+    if kind == "my":
+        if not access.is_registered:
+            await callback.answer("Спершу зареєструйтесь.", show_alert=True)
+            return
+        rendered = await render_own_applications(
+            session, access.telegram_user_id, offset=offset
+        )
+    elif kind == "all":
+        if await _reject_non_admin(callback, access):
+            return
+        rendered = await render_all_applications(session, offset=offset)
+    elif kind in ("emp", "pos", "comp"):
+        if not access.is_main_admin:
+            await callback.answer(
+                "Дія доступна лише головному адміністратору.", show_alert=True
+            )
+            return
+        if kind == "emp":
+            rendered = await render_employees(session, offset=offset)
+        elif kind == "pos":
+            rendered = await render_positions(session, offset=offset)
+        else:
+            rendered = await render_companies(session, offset=offset)
+    else:
+        await callback.answer("Невідомий список", show_alert=True)
+        return
+
+    await callback.answer()
+    text, keyboard = rendered
+    if callback.message is not None:
+        # Гортаємо на місці, а не засипаємо чат новими повідомленнями.
+        await callback.message.edit_text(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith(f"{DELETE_PREFIX}:"))

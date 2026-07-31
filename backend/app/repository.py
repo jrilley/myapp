@@ -86,18 +86,25 @@ async def list_applications(
 
 
 async def list_user_applications(
-    session: AsyncSession, telegram_user_id: int, *, limit: int = 10
-) -> list[Application]:
+    session: AsyncSession, telegram_user_id: int, *, limit: int = 10, offset: int = 0
+) -> tuple[list[Application], int]:
+    """Повертає (сторінку, загальну кількість) — total потрібен пагінації,
+    щоб знати, чи є наступна сторінка."""
+    filters = (
+        Application.telegram_user_id == telegram_user_id,
+        Application.deleted_at.is_(None),
+    )
+    total = await session.scalar(
+        select(func.count()).select_from(Application).where(*filters)
+    )
     stmt = (
         select(Application)
-        .where(
-            Application.telegram_user_id == telegram_user_id,
-            Application.deleted_at.is_(None),
-        )
+        .where(*filters)
         .order_by(Application.created_at.desc(), Application.id.desc())
         .limit(limit)
+        .offset(offset)
     )
-    return list(await session.scalars(stmt))
+    return list(await session.scalars(stmt)), int(total or 0)
 
 
 async def count_by_status(session: AsyncSession) -> dict[ApplicationStatus, int]:
@@ -188,14 +195,18 @@ def _employee_with_links():
     )
 
 
-async def list_employees(session: AsyncSession, *, limit: int = 30) -> list[Employee]:
+async def list_employees(
+    session: AsyncSession, *, limit: int = 8, offset: int = 0
+) -> tuple[list[Employee], int]:
+    total = await session.scalar(select(func.count()).select_from(Employee))
     stmt = (
         select(Employee)
         .options(*_employee_with_links())
         .order_by(Employee.fullname)
         .limit(limit)
+        .offset(offset)
     )
-    return list(await session.scalars(stmt))
+    return list(await session.scalars(stmt)), int(total or 0)
 
 
 async def get_employee(session: AsyncSession, employee_id: int) -> Employee | None:
@@ -229,7 +240,16 @@ async def update_employee(
 
 
 async def list_companies(session: AsyncSession) -> list[Company]:
+    """Повний список — для клавіатури вибору при реєстрації."""
     return list(await session.scalars(select(Company).order_by(Company.name)))
+
+
+async def page_companies(
+    session: AsyncSession, *, limit: int = 10, offset: int = 0
+) -> tuple[list[Company], int]:
+    total = await session.scalar(select(func.count()).select_from(Company))
+    stmt = select(Company).order_by(Company.name).limit(limit).offset(offset)
+    return list(await session.scalars(stmt)), int(total or 0)
 
 
 async def get_company(session: AsyncSession, company_id: int) -> Company | None:
@@ -251,7 +271,16 @@ async def create_company(
 
 
 async def list_positions(session: AsyncSession) -> list[Position]:
+    """Повний список — для клавіатури вибору посади."""
     return list(await session.scalars(select(Position).order_by(Position.id)))
+
+
+async def page_positions(
+    session: AsyncSession, *, limit: int = 10, offset: int = 0
+) -> tuple[list[Position], int]:
+    total = await session.scalar(select(func.count()).select_from(Position))
+    stmt = select(Position).order_by(Position.id).limit(limit).offset(offset)
+    return list(await session.scalars(stmt)), int(total or 0)
 
 
 async def get_position_by_name(session: AsyncSession, name: str) -> Position | None:
