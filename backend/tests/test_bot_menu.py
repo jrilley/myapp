@@ -34,6 +34,7 @@ from app.bot.keyboards import (
     MENU_NEW,
     MENU_POSITIONS,
     MENU_STATS,
+    MENU_VEHICLE_ADD,
     REG_START,
 )
 from app.bot.states import ApplicationForm
@@ -50,8 +51,12 @@ from tests.conftest import (
 
 USER_MENU = [MENU_NEW, MENU_MY, MENU_HELP]
 ADMIN_MENU = [
-    MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS,
+    MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS, MENU_VEHICLE_ADD,
     MENU_EMPLOYEES, MENU_POSITIONS, MENU_COMPANIES, MENU_HELP,
+]
+#: Адміністратор компанії: без керування довідниками, але з транспортом.
+COMPANY_ADMIN_MENU = [
+    MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS, MENU_VEHICLE_ADD, MENU_HELP,
 ]
 GUEST_MENU = [REG_START, MENU_HELP]
 

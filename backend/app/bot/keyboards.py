@@ -30,6 +30,45 @@ EMP_EDIT_PREFIX = "empedit"
 EMP_SET_PREFIX = "empset"
 POSITION_ADD = "position:add"
 
+MENU_VEHICLE_ADD = "menu:vehicle"
+VEHICLE_TYPE_PREFIX = "veh:type"
+VEHICLE_COMPANY_PREFIX = "veh:company"
+VEHICLE_CONFIRM = "veh:confirm"
+
+#: Тип транспорту → підпис. Ключі збігаються з repository.VEHICLE_MODELS.
+VEHICLE_TITLES = {"truck": "Тягач", "trailer": "Причіп"}
+
+
+def vehicle_type_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка в меню одна, а таблиці дві — тип питаємо першим кроком."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚛 Тягач", callback_data=f"{VEHICLE_TYPE_PREFIX}:truck")
+    builder.button(text="🚚 Причіп", callback_data=f"{VEHICLE_TYPE_PREFIX}:trailer")
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+
+def vehicle_company_keyboard(companies) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for company in companies:
+        builder.button(
+            text=f"{company.name} - {company.tax_id}",
+            callback_data=f"{VEHICLE_COMPANY_PREFIX}:{company.id}",
+        )
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def vehicle_confirm_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Зберегти", callback_data=VEHICLE_CONFIRM)
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(2)
+    return builder.as_markup()
+
+
 PAGE_PREFIX = "page"
 #: Натискання на «2 / 5» нічого не робить, але Telegram чекає відповіді,
 #: інакше на кнопці лишається годинник.
@@ -134,6 +173,7 @@ def main_menu_keyboard(
     if is_admin:
         builder.button(text="🗂 Усі заявки", callback_data=MENU_ALL)
         builder.button(text="📊 Статистика", callback_data=MENU_STATS)
+        builder.button(text="🚛 Додати автомобіль", callback_data=MENU_VEHICLE_ADD)
     if is_main_admin:
         builder.button(text="👥 Користувачі", callback_data=MENU_EMPLOYEES)
         builder.button(text="💼 Посади", callback_data=MENU_POSITIONS)

@@ -46,3 +46,18 @@ class PositionForm(StatesGroup):
     """Додавання посади в довідник."""
 
     name = State()
+
+
+class VehicleForm(StatesGroup):
+    """Додавання тягача або причепа.
+
+    Крок `company` проходить лише головний адміністратор — адміністратору
+    компанії company_id береться з його власного запису в employees.
+    """
+
+    kind = State()
+    company = State()
+    brand = State()
+    model = State()
+    license_plate = State()
+    confirm = State()

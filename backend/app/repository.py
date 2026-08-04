@@ -17,6 +17,8 @@ from app.models import (
     Employee,
     Position,
     Role,
+    Trailer,
+    Truck,
 )
 
 
@@ -295,6 +297,57 @@ async def create_position(session: AsyncSession, *, name: str) -> Position:
     await session.commit()
     await session.refresh(position)
     return position
+
+
+# ---------------------------------------------------------------------------
+# Транспорт
+# ---------------------------------------------------------------------------
+
+#: Тип транспорту → модель. Ключі збігаються з callback_data кнопок вибору.
+VEHICLE_MODELS: dict[str, type[Truck] | type[Trailer]] = {
+    "truck": Truck,
+    "trailer": Trailer,
+}
+
+
+def vehicle_model(kind: str) -> type[Truck] | type[Trailer] | None:
+    return VEHICLE_MODELS.get(kind)
+
+
+async def get_vehicle_by_plate(
+    session: AsyncSession, kind: str, license_plate: str
+) -> Truck | Trailer | None:
+    """Номер унікальний у межах своєї таблиці, тому шукаємо саме в ній."""
+    model = vehicle_model(kind)
+    if model is None:
+        return None
+    return await session.scalar(
+        select(model).where(model.license_plate == license_plate)
+    )
+
+
+async def create_vehicle(
+    session: AsyncSession,
+    kind: str,
+    *,
+    brand: str,
+    model: str,
+    license_plate: str,
+    company_id: int | None,
+) -> Truck | Trailer:
+    vehicle_cls = vehicle_model(kind)
+    if vehicle_cls is None:
+        raise ValueError(f"Невідомий тип транспорту: {kind!r}")
+    vehicle = vehicle_cls(
+        brand=brand,
+        model=model,
+        license_plate=license_plate,
+        company_id=company_id,
+    )
+    session.add(vehicle)
+    await session.commit()
+    await session.refresh(vehicle)
+    return vehicle
 
 
 async def list_roles(session: AsyncSession) -> list[Role]:

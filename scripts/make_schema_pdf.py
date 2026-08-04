@@ -231,6 +231,7 @@ MENU_BUTTONS = [
     ("«Мої заявки»", "зареєстровані", "Свої заявки, до 10, з кнопкою видалення."),
     ("«Усі заявки»", "адміни", "Останні 10 заявок усіх користувачів, з автором."),
     ("«Статистика»", "адміни", "Кількість заявок за статусами."),
+    ("«Додати автомобіль»", "адміни", "Тягач або причіп; компанія — за роллю."),
     ("«Користувачі»", "головний адмін", "Список, картка кожного, редагування полів."),
     ("«Посади»", "головний адмін", "Довідник посад і додавання нових."),
     ("«Компанії»", "головний адмін", "Список компаній і додавання нових."),
@@ -406,7 +407,7 @@ def page_route(s: Sheet) -> None:
 
     # ---- нижні панелі ----
     # Жовтий блок вище закінчується на ~418 — панелі мають починатись під ним.
-    panel_top = 430
+    panel_top = 424
     left_w, right_w = 520, 590
 
     ty2 = s.section(M, panel_top, left_w, "керування: inline-кнопки")
@@ -418,9 +419,9 @@ def page_route(s: Sheet) -> None:
         s.line(M, row, M + left_w, row, color=LINE_SOFT, width=0.6)
         s.text(M, row + 15, button, font="Sans-Bold", size=8.5, color=INK)
         s.text(M + 138, row + 15, who, font="Sans", size=8, color=SLATE)
-        end = s.wrap(M + 242, row + 14, left_w - 242, what, size=7.6, leading=9.4,
+        end = s.wrap(M + 242, row + 13, left_w - 242, what, size=7.4, leading=9,
                      color=INK)
-        row = max(row + 23, end + 2)
+        row = max(row + 21, end + 2)
     s.line(M, row, M + left_w, row, color=LINE_SOFT, width=0.6)
 
     s.wrap(M, row + 16, left_w,
