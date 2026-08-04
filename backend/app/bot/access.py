@@ -50,6 +50,27 @@ class Access:
         return self.employee.fullname if self.employee is not None else None
 
 
+ADMIN_ONLY = "Дія доступна лише адміністраторам."
+MAIN_ADMIN_ONLY = "Дія доступна лише головному адміністратору."
+
+
+def resolve_company_id(access: Access, requested) -> int | None:
+    """Яку компанію цьому користувачу дозволено дивитись.
+
+    Головний адмін — будь-яку, вказану в запиті. Адміністратор компанії —
+    **лише свою**, незалежно від того, що прийшло в callback_data: інакше
+    достатньо було б підмінити id, щоб побачити чужих працівників.
+    """
+    if not access.is_admin:
+        return None
+    if access.is_main_admin:
+        try:
+            return int(requested)
+        except (TypeError, ValueError):
+            return None
+    return access.employee.company_id if access.employee else None
+
+
 async def resolve_access(
     session: AsyncSession, settings: Settings, telegram_user_id: int
 ) -> Access:

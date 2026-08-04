@@ -171,13 +171,24 @@ async def test_all_applications_page_rejects_non_admin(session, access):
     assert not callback.message.edits
 
 
-@pytest.mark.parametrize("kind", ["emp", "pos", "comp"])
-async def test_management_pages_reject_non_main_admin(session, access, kind):
+@pytest.mark.parametrize("kind", ["pos", "comp"])
+async def test_reference_pages_reject_non_main_admin(session, access, kind):
     callback = FakeCallback(f"{PAGE_PREFIX}:{kind}:0", user=FakeUser(OWNER_ID))
 
     await on_page(callback, session, access)
 
     assert callback.answered == ["Дія доступна лише головному адміністратору."]
+    assert not callback.message.edits
+
+
+@pytest.mark.parametrize("payload", ["cemp:1", "veh:truck:1"])
+async def test_company_scoped_pages_reject_non_admin(session, access, payload):
+    """Списки всередині компанії — лише для адміністраторів."""
+    callback = FakeCallback(f"{PAGE_PREFIX}:{payload}:0", user=FakeUser(OWNER_ID))
+
+    await on_page(callback, session, access)
+
+    assert callback.answered == ["Дія доступна лише адміністраторам."]
     assert not callback.message.edits
 
 

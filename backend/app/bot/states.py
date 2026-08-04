@@ -61,3 +61,11 @@ class VehicleForm(StatesGroup):
     model = State()
     license_plate = State()
     confirm = State()
+
+
+class VehicleEdit(StatesGroup):
+    """Редагування наявного транспорту з його картки."""
+
+    brand = State()
+    model = State()
+    license_plate = State()

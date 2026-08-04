@@ -31,6 +31,16 @@ EMP_SET_PREFIX = "empset"
 POSITION_ADD = "position:add"
 
 MENU_VEHICLE_ADD = "menu:vehicle"
+#: Для адміністратора компанії — власна компанія мається на увазі.
+MENU_MY_VEHICLES = "menu:myveh"
+MENU_MY_EMPLOYEES = "menu:myemp"
+
+COMPANY_CARD_PREFIX = "comp"
+COMPANY_VEHICLES_PREFIX = "compveh"
+COMPANY_EMPLOYEES_PREFIX = "compemp"
+VEHICLE_LIST_PREFIX = "vlist"
+VEHICLE_CARD_PREFIX = "vcard"
+VEHICLE_EDIT_PREFIX = "vedit"
 VEHICLE_TYPE_PREFIX = "veh:type"
 VEHICLE_COMPANY_PREFIX = "veh:company"
 VEHICLE_CONFIRM = "veh:confirm"
@@ -174,10 +184,15 @@ def main_menu_keyboard(
         builder.button(text="🗂 Усі заявки", callback_data=MENU_ALL)
         builder.button(text="📊 Статистика", callback_data=MENU_STATS)
         builder.button(text="🚛 Додати автомобіль", callback_data=MENU_VEHICLE_ADD)
+    if is_admin and not is_main_admin:
+        # Адміністратор компанії бачить лише свою компанію, тож заходить
+        # у транспорт і працівників напряму, без кроку вибору компанії.
+        builder.button(text="🚚 Транспорт", callback_data=MENU_MY_VEHICLES)
+        builder.button(text="👥 Працівники", callback_data=MENU_MY_EMPLOYEES)
     if is_main_admin:
-        builder.button(text="👥 Користувачі", callback_data=MENU_EMPLOYEES)
-        builder.button(text="💼 Посади", callback_data=MENU_POSITIONS)
+        # Головний адмін заходить до транспорту й працівників через компанію.
         builder.button(text="🏢 Компанії", callback_data=MENU_COMPANIES)
+        builder.button(text="💼 Посади", callback_data=MENU_POSITIONS)
     builder.button(text="ℹ️ Довідка", callback_data=MENU_HELP)
     builder.adjust(1)
     return builder.as_markup()
@@ -222,25 +237,36 @@ def companies_keyboard(
 
 
 def employees_keyboard(
-    employees, *, offset: int = 0, total: int | None = None
+    employees,
+    *,
+    company_id: int,
+    offset: int = 0,
+    total: int | None = None,
+    back: str = MENU_BACK,
 ) -> InlineKeyboardMarkup:
-    """Список співробітників: кожен — кнопка, що відкриває картку."""
+    """Список співробітників компанії: кожен — кнопка, що відкриває картку.
+
+    Підпис — посада й ПІБ, як просив замовник.
+    """
     builder = InlineKeyboardBuilder()
     for employee in employees:
         builder.button(
-            text=f"{employee.fullname} · {employee.role.role}",
+            text=f"{employee.position.position}, {employee.fullname}",
             callback_data=f"{EMP_VIEW_PREFIX}:{employee.id}",
         )
     builder.adjust(1)
     if total is not None:
         _add_pagination(
-            builder, "emp", offset=offset, limit=PAGE_EMPLOYEES, total=total
+            builder, f"cemp:{company_id}", offset=offset, limit=PAGE_EMPLOYEES,
+            total=total,
         )
-    builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back))
     return builder.as_markup()
 
 
-def employee_card_keyboard(employee_id: int) -> InlineKeyboardMarkup:
+def employee_card_keyboard(
+    employee_id: int, back: str = MENU_BACK
+) -> InlineKeyboardMarkup:
     """Що саме редагуємо — вирішує кнопка; редактор один на поле."""
     builder = InlineKeyboardBuilder()
     for field, title in (
@@ -254,7 +280,7 @@ def employee_card_keyboard(employee_id: int) -> InlineKeyboardMarkup:
         builder.button(
             text=title, callback_data=f"{EMP_EDIT_PREFIX}:{field}:{employee_id}"
         )
-    builder.button(text="⬅️ До списку", callback_data=MENU_EMPLOYEES)
+    builder.button(text="⬅️ До списку", callback_data=back)
     builder.adjust(2, 2, 2, 1)
     return builder.as_markup()
 
@@ -271,6 +297,91 @@ def employee_choice_keyboard(field: str, employee_id: int, items) -> InlineKeybo
         text="⬅️ Назад", callback_data=f"{EMP_VIEW_PREFIX}:{employee_id}"
     )
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def companies_list_keyboard(
+    companies, *, offset: int = 0, total: int | None = None
+) -> InlineKeyboardMarkup:
+    """Список компаній: кожна — вхід у її транспорт і працівників."""
+    builder = InlineKeyboardBuilder()
+    for company in companies:
+        builder.button(
+            text=f"{company.name} - {company.tax_id}",
+            callback_data=f"{COMPANY_CARD_PREFIX}:{company.id}",
+        )
+    builder.adjust(1)
+    if total is not None:
+        _add_pagination(
+            builder, "comp", offset=offset, limit=PAGE_REFERENCE, total=total
+        )
+    builder.row(
+        InlineKeyboardButton(text="➕ Додати компанію", callback_data=COMPANY_ADD)
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
+    return builder.as_markup()
+
+
+def company_card_keyboard(company_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🚚 Транспорт",
+        callback_data=f"{COMPANY_VEHICLES_PREFIX}:{company_id}",
+    )
+    builder.button(
+        text="👥 Працівники",
+        callback_data=f"{COMPANY_EMPLOYEES_PREFIX}:{company_id}",
+    )
+    builder.button(text="⬅️ До компаній", callback_data=MENU_COMPANIES)
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+
+def vehicle_kind_keyboard(company_id: int, *, back: str) -> InlineKeyboardMarkup:
+    """Вибір тягачі/причепи перед списком."""
+    builder = InlineKeyboardBuilder()
+    for kind, title in (("truck", "🚛 Тягачі"), ("trailer", "🚚 Причепи")):
+        builder.button(
+            text=title,
+            callback_data=f"{VEHICLE_LIST_PREFIX}:{kind}:{company_id}:0",
+        )
+    builder.button(text="⬅️ Назад", callback_data=back)
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+
+def vehicle_list_keyboard(
+    vehicles, kind: str, company_id: int, *, offset: int, total: int, back: str
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for vehicle in vehicles:
+        builder.button(
+            text=f"{vehicle.brand} - {vehicle.license_plate}",
+            callback_data=f"{VEHICLE_CARD_PREFIX}:{kind}:{vehicle.id}",
+        )
+    builder.adjust(1)
+    # Формат має збігатися з розбором у on_page: page:veh:<тип>:<компанія>:<зсув>
+    _add_pagination(
+        builder, f"veh:{kind}:{company_id}", offset=offset, limit=PAGE_REFERENCE,
+        total=total,
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back))
+    return builder.as_markup()
+
+
+def vehicle_card_keyboard(kind: str, vehicle_id: int, back: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for field, title in (
+        ("brand", "✏️ Марка"),
+        ("model", "✏️ Модель"),
+        ("plate", "✏️ Номер"),
+    ):
+        builder.button(
+            text=title,
+            callback_data=f"{VEHICLE_EDIT_PREFIX}:{field}:{kind}:{vehicle_id}",
+        )
+    builder.button(text="⬅️ До списку", callback_data=back)
+    builder.adjust(2, 1, 1)
     return builder.as_markup()
 
 

@@ -350,6 +350,72 @@ async def create_vehicle(
     return vehicle
 
 
+async def get_vehicle(
+    session: AsyncSession, kind: str, vehicle_id: int
+) -> Truck | Trailer | None:
+    model = vehicle_model(kind)
+    if model is None:
+        return None
+    return await session.scalar(
+        select(model).where(model.id == vehicle_id).options(selectinload(model.company))
+    )
+
+
+async def list_company_vehicles(
+    session: AsyncSession,
+    kind: str,
+    company_id: int,
+    *,
+    limit: int = 10,
+    offset: int = 0,
+) -> tuple[list[Truck | Trailer], int]:
+    model = vehicle_model(kind)
+    if model is None:
+        return [], 0
+    total = await session.scalar(
+        select(func.count()).select_from(model).where(model.company_id == company_id)
+    )
+    stmt = (
+        select(model)
+        .where(model.company_id == company_id)
+        .order_by(model.brand, model.license_plate)
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(await session.scalars(stmt)), int(total or 0)
+
+
+async def update_vehicle(
+    session: AsyncSession, vehicle: Truck | Trailer, **fields
+) -> Truck | Trailer:
+    for name, value in fields.items():
+        setattr(vehicle, name, value)
+    await session.commit()
+    vehicle_id = vehicle.id
+    kind = "truck" if isinstance(vehicle, Truck) else "trailer"
+    session.expire(vehicle)
+    return await get_vehicle(session, kind, vehicle_id)
+
+
+async def list_company_employees(
+    session: AsyncSession, company_id: int, *, limit: int = 8, offset: int = 0
+) -> tuple[list[Employee], int]:
+    total = await session.scalar(
+        select(func.count()).select_from(Employee).where(
+            Employee.company_id == company_id
+        )
+    )
+    stmt = (
+        select(Employee)
+        .where(Employee.company_id == company_id)
+        .options(*_employee_with_links())
+        .order_by(Employee.fullname)
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(await session.scalars(stmt)), int(total or 0)
+
+
 async def list_roles(session: AsyncSession) -> list[Role]:
     return list(await session.scalars(select(Role).order_by(Role.id)))
 

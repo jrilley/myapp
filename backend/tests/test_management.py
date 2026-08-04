@@ -1,4 +1,4 @@
-"""Тести керування співробітниками та довідником посад.
+﻿"""Тести керування співробітниками та довідником посад.
 
 Обидві гілки доступні лише головному адміністратору, і кожен хендлер
 перевіряє це сам — приховати кнопку недостатньо.
@@ -10,7 +10,12 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
-from app.bot.access import ROLE_COMPANY_ADMIN, ROLE_MAIN_ADMIN, ROLE_USER
+from app.bot.access import (
+    ADMIN_ONLY,
+    ROLE_COMPANY_ADMIN,
+    ROLE_MAIN_ADMIN,
+    ROLE_USER,
+)
 from app.bot.handlers.management import (
     edit_fullname,
     edit_phone,
@@ -18,7 +23,7 @@ from app.bot.handlers.management import (
     on_employee_card,
     on_employee_edit,
     on_employee_set,
-    on_employees,
+    on_company_employees,
     on_position_add,
     on_positions,
     position_name,
@@ -27,7 +32,7 @@ from app.bot.keyboards import (
     EMP_EDIT_PREFIX,
     EMP_SET_PREFIX,
     EMP_VIEW_PREFIX,
-    MENU_EMPLOYEES,
+    COMPANY_EMPLOYEES_PREFIX,
     MENU_POSITIONS,
     POSITION_ADD,
 )
@@ -89,27 +94,33 @@ async def employee(session, org):
 # ---------------------------------------------------------------------------
 
 
-async def test_plain_admin_cannot_reach_management(session, state, access, employee):
-    """access — звичайний користувач; але навіть «Адміністратор компанії»
-    сюди не має доступу, тільки головний."""
-    for handler, data in (
-        (on_employees, MENU_EMPLOYEES),
-        (on_positions, MENU_POSITIONS),
-    ):
-        callback = FakeCallback(data, user=FakeUser(OWNER_ID))
-        await handler(callback, state, session, access)
-        assert callback.answered == [DENIED]
-        assert not callback.message.answers
+async def test_positions_are_main_admin_only(session, state, access):
+    """Довідник посад — глобальний, тож лише головний адміністратор."""
+    callback = FakeCallback(MENU_POSITIONS, user=FakeUser(OWNER_ID))
+
+    await on_positions(callback, state, session, access)
+
+    assert callback.answered == [DENIED]
+    assert not callback.message.answers
 
 
-async def test_employee_card_is_closed_to_non_main_admin(
+async def test_ordinary_user_cannot_list_employees(session, state, access, employee):
+    callback = FakeCallback(f"{COMPANY_EMPLOYEES_PREFIX}:1", user=FakeUser(OWNER_ID))
+
+    await on_company_employees(callback, state, session, access)
+
+    assert callback.answered == [ADMIN_ONLY]
+    assert not callback.message.answers
+
+
+async def test_ordinary_user_cannot_open_an_employee_card(
     session, state, access, employee
 ):
     callback = FakeCallback(f"{EMP_VIEW_PREFIX}:{employee.id}", user=FakeUser(OWNER_ID))
 
     await on_employee_card(callback, state, session, access)
 
-    assert callback.answered == [DENIED]
+    assert callback.answered == [ADMIN_ONLY]
 
 
 # ---------------------------------------------------------------------------
@@ -118,20 +129,26 @@ async def test_employee_card_is_closed_to_non_main_admin(
 
 
 async def test_list_shows_every_employee_as_a_button(
-    session, state, access_admin, employee
+    session, state, access_admin, org, employee
 ):
-    callback = FakeCallback(MENU_EMPLOYEES, user=FakeUser(ADMIN_ID))
+    company, _ = org
+    callback = FakeCallback(
+        f"{COMPANY_EMPLOYEES_PREFIX}:{company.id}", user=FakeUser(ADMIN_ID)
+    )
 
-    await on_employees(callback, state, session, access_admin)
+    await on_company_employees(callback, state, session, access_admin)
 
     data = callback_data(callback.message.markups[0])
     assert f"{EMP_VIEW_PREFIX}:{employee.id}" in data
 
 
 async def test_empty_list_is_reported(session, state, access_admin, org):
-    callback = FakeCallback(MENU_EMPLOYEES, user=FakeUser(ADMIN_ID))
+    company, _ = org
+    callback = FakeCallback(
+        f"{COMPANY_EMPLOYEES_PREFIX}:{company.id}", user=FakeUser(ADMIN_ID)
+    )
 
-    await on_employees(callback, state, session, access_admin)
+    await on_company_employees(callback, state, session, access_admin)
 
     assert "ще немає" in callback.message.answers[0]
 
@@ -172,7 +189,9 @@ async def test_editing_fullname_updates_the_row(
     await on_employee_edit(callback, state, session, access_admin)
     assert await state.get_state() == EmployeeEdit.fullname
 
-    await edit_fullname(FakeMessage("Олена Петрівна Ковальчук"), state, session)
+    await edit_fullname(
+        FakeMessage("Олена Петрівна Ковальчук"), state, session, access_admin
+    )
 
     updated = await repository.get_employee(session, employee.id)
     assert updated.fullname == "Олена Петрівна Ковальчук"
@@ -184,7 +203,7 @@ async def test_short_fullname_keeps_state(session, state, access_admin, employee
     await state.update_data(employee_id=employee.id)
     message = FakeMessage("О")
 
-    await edit_fullname(message, state, session)
+    await edit_fullname(message, state, session, access_admin)
 
     assert await state.get_state() == EmployeeEdit.fullname
     assert "від 2 до" in message.answers[0]
@@ -210,7 +229,7 @@ async def test_editing_second_phone_updates_the_row(
     await state.set_state(EmployeeEdit.phone2)
     await state.update_data(employee_id=employee.id)
 
-    await edit_phone2(FakeMessage("+380509998877"), state, session)
+    await edit_phone2(FakeMessage("+380509998877"), state, session, access_admin)
 
     updated = await repository.get_employee(session, employee.id)
     assert updated.phone_number2 == "+380509998877"
@@ -222,7 +241,7 @@ async def test_second_phone_can_be_cleared(session, state, access_admin, employe
     await state.set_state(EmployeeEdit.phone2)
     await state.update_data(employee_id=employee.id)
 
-    await edit_phone2(FakeMessage("-"), state, session)
+    await edit_phone2(FakeMessage("-"), state, session, access_admin)
 
     updated = await repository.get_employee(session, employee.id)
     assert updated.phone_number2 is None
@@ -232,7 +251,7 @@ async def test_editing_phone_updates_the_row(session, state, access_admin, emplo
     await state.set_state(EmployeeEdit.phone)
     await state.update_data(employee_id=employee.id)
 
-    await edit_phone(FakeMessage("+380509998877"), state, session)
+    await edit_phone(FakeMessage("+380509998877"), state, session, access_admin)
 
     updated = await repository.get_employee(session, employee.id)
     assert updated.phone_number == "+380509998877"

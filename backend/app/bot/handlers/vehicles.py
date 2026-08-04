@@ -14,7 +14,8 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.access import Access
+from app.bot.access import ADMIN_ONLY, Access, resolve_company_id
+from app.bot.actions import render_company_vehicles
 from app.bot.constants import (
     MAX_LICENSE_PLATE,
     MAX_VEHICLE_BRAND,
@@ -23,17 +24,26 @@ from app.bot.constants import (
 )
 from app.bot.handlers.common import menu_for
 from app.bot.keyboards import (
+    COMPANY_CARD_PREFIX,
+    COMPANY_VEHICLES_PREFIX,
+    MENU_BACK,
+    MENU_MY_VEHICLES,
     MENU_VEHICLE_ADD,
+    VEHICLE_CARD_PREFIX,
     VEHICLE_COMPANY_PREFIX,
     VEHICLE_CONFIRM,
+    VEHICLE_EDIT_PREFIX,
+    VEHICLE_LIST_PREFIX,
     VEHICLE_TITLES,
     VEHICLE_TYPE_PREFIX,
     cancel_keyboard,
+    vehicle_card_keyboard,
     vehicle_company_keyboard,
     vehicle_confirm_keyboard,
+    vehicle_kind_keyboard,
     vehicle_type_keyboard,
 )
-from app.bot.states import VehicleForm
+from app.bot.states import VehicleEdit, VehicleForm
 
 router = Router(name="vehicles")
 
@@ -239,9 +249,244 @@ async def step_confirm(
     )
 
 
+# ---------------------------------------------------------------------------
+# Перегляд і редагування
+# ---------------------------------------------------------------------------
+
+
+def _card(vehicle, kind: str) -> str:
+    company = vehicle.company.name if vehicle.company else "—"
+    return (
+        f"<b>{VEHICLE_TITLES[kind]}</b>\n\n"
+        f"<b>Марка:</b> {escape(vehicle.brand)}\n"
+        f"<b>Модель:</b> {escape(vehicle.model)}\n"
+        f"<b>Номер:</b> {escape(vehicle.license_plate)}\n"
+        f"<b>Компанія:</b> {escape(company)}"
+    )
+
+
+async def _show_card(message: Message, session: AsyncSession, kind: str, vehicle_id: int) -> None:
+    vehicle = await repository.get_vehicle(session, kind, vehicle_id)
+    if vehicle is None:
+        await message.answer("Транспорт не знайдено.")
+        return
+    back = f"{VEHICLE_LIST_PREFIX}:{kind}:{vehicle.company_id}:0"
+    await message.answer(
+        _card(vehicle, kind),
+        reply_markup=vehicle_card_keyboard(kind, vehicle.id, back),
+    )
+
+
+@router.callback_query(F.data.startswith(f"{COMPANY_VEHICLES_PREFIX}:"))
+async def on_company_vehicles(
+    callback: CallbackQuery, state: FSMContext, access: Access
+) -> None:
+    """Вибір тягачі/причепи для конкретної компанії."""
+    company_id = resolve_company_id(access, (callback.data or "").split(":", 1)[1])
+    if company_id is None:
+        await callback.answer(ADMIN_ONLY, show_alert=True)
+        return
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        back = (
+            f"{COMPANY_CARD_PREFIX}:{company_id}" if access.is_main_admin else MENU_BACK
+        )
+        await callback.message.answer(
+            "Що показати?",
+            reply_markup=vehicle_kind_keyboard(company_id, back=back),
+        )
+
+
+@router.callback_query(F.data == MENU_MY_VEHICLES)
+async def on_my_vehicles(
+    callback: CallbackQuery, state: FSMContext, access: Access
+) -> None:
+    """Для адміністратора компанії — транспорт його власної компанії."""
+    company_id = resolve_company_id(access, None)
+    if company_id is None:
+        await callback.answer(ADMIN_ONLY, show_alert=True)
+        return
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Що показати?",
+            reply_markup=vehicle_kind_keyboard(company_id, back=MENU_BACK),
+        )
+
+
+@router.callback_query(F.data.startswith(f"{VEHICLE_LIST_PREFIX}:"))
+async def on_vehicle_list(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[3].isdigit():
+        await callback.answer("Невідомий список", show_alert=True)
+        return
+    _, kind, raw_company, raw_offset = parts
+
+    company_id = resolve_company_id(access, raw_company)
+    if company_id is None:
+        await callback.answer(ADMIN_ONLY, show_alert=True)
+        return
+
+    rendered = await render_company_vehicles(
+        session, kind, company_id, offset=int(raw_offset),
+        is_main_admin=access.is_main_admin,
+    )
+    if rendered is None:
+        await callback.answer("Невідомий тип", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        text, keyboard = rendered
+        await callback.message.answer(text, reply_markup=keyboard)
+
+
+async def _vehicle_or_denied(
+    callback: CallbackQuery, session: AsyncSession, access: Access, kind: str,
+    vehicle_id: int,
+):
+    if not access.is_admin:
+        await callback.answer(ADMIN_ONLY, show_alert=True)
+        return None
+    vehicle = await repository.get_vehicle(session, kind, vehicle_id)
+    if vehicle is None:
+        await callback.answer("Транспорт не знайдено", show_alert=True)
+        return None
+    # Адміністратор компанії не має відкривати чужу машину навіть за прямим id.
+    if not access.is_main_admin and vehicle.company_id != resolve_company_id(
+        access, None
+    ):
+        await callback.answer(ADMIN_ONLY, show_alert=True)
+        return None
+    return vehicle
+
+
+@router.callback_query(F.data.startswith(f"{VEHICLE_CARD_PREFIX}:"))
+async def on_vehicle_card(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        await callback.answer("Невідомий транспорт", show_alert=True)
+        return
+    _, kind, raw_id = parts
+
+    vehicle = await _vehicle_or_denied(callback, session, access, kind, int(raw_id))
+    if vehicle is None:
+        return
+
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        await _show_card(callback.message, session, kind, vehicle.id)
+
+
+@router.callback_query(F.data.startswith(f"{VEHICLE_EDIT_PREFIX}:"))
+async def on_vehicle_edit(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[3].isdigit():
+        await callback.answer("Невідоме поле", show_alert=True)
+        return
+    _, field, kind, raw_id = parts
+
+    prompts = {
+        "brand": (VehicleEdit.brand, "Нова марка:"),
+        "model": (VehicleEdit.model, "Нова модель:"),
+        "plate": (VehicleEdit.license_plate, "Новий державний номер:"),
+    }
+    if field not in prompts:
+        await callback.answer("Невідоме поле", show_alert=True)
+        return
+
+    vehicle = await _vehicle_or_denied(callback, session, access, kind, int(raw_id))
+    if vehicle is None:
+        return
+
+    next_state, prompt = prompts[field]
+    await state.set_state(next_state)
+    await state.update_data(kind=kind, vehicle_id=vehicle.id)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(prompt, reply_markup=cancel_keyboard())
+
+
+@router.message(VehicleEdit.brand, F.text)
+async def edit_brand(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if not 1 <= len(value) <= MAX_VEHICLE_BRAND:
+        await message.answer(
+            f"Марка має бути від 1 до {MAX_VEHICLE_BRAND} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await _apply_edit(message, state, session, brand=value)
+
+
+@router.message(VehicleEdit.model, F.text)
+async def edit_model(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if not 1 <= len(value) <= MAX_VEHICLE_MODEL:
+        await message.answer(
+            f"Модель має бути від 1 до {MAX_VEHICLE_MODEL} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await _apply_edit(message, state, session, model=value)
+
+
+@router.message(VehicleEdit.license_plate, F.text)
+async def edit_plate(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip().upper()
+    if not MIN_LICENSE_PLATE <= len(value) <= MAX_LICENSE_PLATE:
+        await message.answer(
+            f"Номер має бути від {MIN_LICENSE_PLATE} до {MAX_LICENSE_PLATE} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    data = await state.get_data()
+    existing = await repository.get_vehicle_by_plate(session, data["kind"], value)
+    if existing is not None and existing.id != data["vehicle_id"]:
+        await message.answer(
+            "Транспорт із таким номером уже є. Введіть інший.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await _apply_edit(message, state, session, license_plate=value)
+
+
+async def _apply_edit(
+    message: Message, state: FSMContext, session: AsyncSession, **fields
+) -> None:
+    data = await state.get_data()
+    await state.clear()
+    vehicle = await repository.get_vehicle(session, data["kind"], data["vehicle_id"])
+    if vehicle is None:
+        await message.answer("Транспорт не знайдено.")
+        return
+    await repository.update_vehicle(session, vehicle, **fields)
+    await _show_card(message, session, data["kind"], data["vehicle_id"])
+
+
 @router.message(VehicleForm.brand)
 @router.message(VehicleForm.model)
 @router.message(VehicleForm.license_plate)
+@router.message(VehicleEdit.brand)
+@router.message(VehicleEdit.model)
+@router.message(VehicleEdit.license_plate)
 async def non_text(message: Message) -> None:
     await message.answer(
         "Надішліть, будь ласка, текст.", reply_markup=cancel_keyboard()

@@ -4,12 +4,18 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.access import Access
+from app.bot.access import (
+    ADMIN_ONLY,
+    MAIN_ADMIN_ONLY,
+    Access,
+    resolve_company_id,
+)
 from app.bot.actions import (
     delete_application,
     render_all_applications,
     render_companies,
-    render_employees,
+    render_company_employees,
+    render_company_vehicles,
     render_own_applications,
     render_positions,
     render_stats,
@@ -182,14 +188,18 @@ async def on_noop(callback: CallbackQuery) -> None:
 async def on_page(
     callback: CallbackQuery, session: AsyncSession, access: Access
 ) -> None:
-    """Гортання будь-якого списку. Права перевіряються тут заново:
-    offset у callback_data можна підмінити, а сам вид списку — підставити."""
+    """Гортання будь-якого списку.
+
+    Формат: page:<вид>[:<параметри>]:<зсув> — зсув завжди останній, тож
+    списки з додатковими параметрами (компанія, тип транспорту) вкладаються
+    в той самий розбір. Права перевіряються тут заново: і вид, і параметри
+    приходять із callback_data, яку можна підмінити.
+    """
     parts = (callback.data or "").split(":")
-    if len(parts) != 3 or not parts[2].isdigit():
+    if len(parts) < 3 or not parts[-1].isdigit():
         await callback.answer("Не вдалося погортати", show_alert=True)
         return
-    _, kind, raw_offset = parts
-    offset = int(raw_offset)
+    kind, args, offset = parts[1], parts[2:-1], int(parts[-1])
 
     if kind == "my":
         if not access.is_registered:
@@ -202,18 +212,35 @@ async def on_page(
         if await _reject_non_admin(callback, access):
             return
         rendered = await render_all_applications(session, offset=offset)
-    elif kind in ("emp", "pos", "comp"):
+    elif kind in ("pos", "comp"):
         if not access.is_main_admin:
-            await callback.answer(
-                "Дія доступна лише головному адміністратору.", show_alert=True
-            )
+            await callback.answer(MAIN_ADMIN_ONLY, show_alert=True)
             return
-        if kind == "emp":
-            rendered = await render_employees(session, offset=offset)
-        elif kind == "pos":
-            rendered = await render_positions(session, offset=offset)
-        else:
-            rendered = await render_companies(session, offset=offset)
+        rendered = (
+            await render_positions(session, offset=offset)
+            if kind == "pos"
+            else await render_companies(session, offset=offset)
+        )
+    elif kind == "cemp" and args:
+        company_id = resolve_company_id(access, args[0])
+        if company_id is None:
+            await callback.answer(ADMIN_ONLY, show_alert=True)
+            return
+        rendered = await render_company_employees(
+            session, company_id, offset=offset, is_main_admin=access.is_main_admin
+        )
+    elif kind == "veh" and len(args) == 2:
+        company_id = resolve_company_id(access, args[1])
+        if company_id is None:
+            await callback.answer(ADMIN_ONLY, show_alert=True)
+            return
+        rendered = await render_company_vehicles(
+            session, args[0], company_id, offset=offset,
+            is_main_admin=access.is_main_admin,
+        )
+        if rendered is None:
+            await callback.answer("Невідомий тип", show_alert=True)
+            return
     else:
         await callback.answer("Невідомий список", show_alert=True)
         return

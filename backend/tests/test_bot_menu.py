@@ -1,4 +1,4 @@
-"""Тести inline-меню та прав доступу.
+﻿"""Тести inline-меню та прав доступу.
 
 Мета меню — щоб користувач не набирав команд: усе, що він робить,
 має бути досяжним натисканням кнопки. Склад меню залежить від ролі
@@ -28,7 +28,8 @@ from app.bot.keyboards import (
     MENU_ALL,
     MENU_BACK,
     MENU_COMPANIES,
-    MENU_EMPLOYEES,
+    MENU_MY_EMPLOYEES,
+    MENU_MY_VEHICLES,
     MENU_HELP,
     MENU_MY,
     MENU_NEW,
@@ -50,13 +51,15 @@ from tests.conftest import (
 )
 
 USER_MENU = [MENU_NEW, MENU_MY, MENU_HELP]
+#: Головний адмін заходить у транспорт і працівників через компанію.
 ADMIN_MENU = [
     MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS, MENU_VEHICLE_ADD,
-    MENU_EMPLOYEES, MENU_POSITIONS, MENU_COMPANIES, MENU_HELP,
+    MENU_COMPANIES, MENU_POSITIONS, MENU_HELP,
 ]
-#: Адміністратор компанії: без керування довідниками, але з транспортом.
+#: Адміністратор компанії бачить лише свою, тож заходить напряму.
 COMPANY_ADMIN_MENU = [
-    MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS, MENU_VEHICLE_ADD, MENU_HELP,
+    MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS, MENU_VEHICLE_ADD,
+    MENU_MY_VEHICLES, MENU_MY_EMPLOYEES, MENU_HELP,
 ]
 GUEST_MENU = [REG_START, MENU_HELP]
 

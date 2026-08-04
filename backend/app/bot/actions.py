@@ -14,14 +14,19 @@ from app import repository
 from app.bot.access import Access
 from app.bot.formatting import format_admin_application, format_own_application
 from app.bot.keyboards import (
+    COMPANY_CARD_PREFIX,
+    COMPANY_VEHICLES_PREFIX,
+    MENU_BACK,
     PAGE_APPLICATIONS,
     PAGE_EMPLOYEES,
     PAGE_REFERENCE,
+    VEHICLE_TITLES,
     applications_keyboard,
     back_to_menu_keyboard,
-    companies_keyboard,
+    companies_list_keyboard,
     employees_keyboard,
     positions_keyboard,
+    vehicle_list_keyboard,
 )
 from app.bot.publisher import Publisher
 from app.models import ApplicationStatus
@@ -97,16 +102,66 @@ async def render_all_applications(
     )
 
 
-async def render_employees(session: AsyncSession, *, offset: int = 0) -> Rendered:
-    employees, total = await repository.list_employees(
-        session, limit=PAGE_EMPLOYEES, offset=offset
-    )
-    if not employees:
-        return "Зареєстрованих користувачів ще немає.", employees_keyboard([])
+def company_back(company_id: int, *, is_main_admin: bool) -> str:
+    """Куди веде «Назад» зі списків усередині компанії.
 
-    header = f"<b>Користувачі</b> — {_range_note(offset, len(employees), total)}"
+    Головний адмін прийшов через картку компанії, адміністратор компанії —
+    прямо з меню, і картки компанії в нього немає.
+    """
+    return f"{COMPANY_CARD_PREFIX}:{company_id}" if is_main_admin else MENU_BACK
+
+
+async def render_company_employees(
+    session: AsyncSession,
+    company_id: int,
+    *,
+    offset: int = 0,
+    is_main_admin: bool = False,
+) -> Rendered:
+    employees, total = await repository.list_company_employees(
+        session, company_id, limit=PAGE_EMPLOYEES, offset=offset
+    )
+    back = company_back(company_id, is_main_admin=is_main_admin)
+    if not employees:
+        return (
+            "У цій компанії ще немає зареєстрованих працівників.",
+            employees_keyboard([], company_id=company_id, back=back),
+        )
+
+    header = f"<b>Працівники</b> — {_range_note(offset, len(employees), total)}"
     return f"{header}\nОберіть, щоб переглянути:", employees_keyboard(
-        employees, offset=offset, total=total
+        employees, company_id=company_id, offset=offset, total=total, back=back
+    )
+
+
+async def render_company_vehicles(
+    session: AsyncSession,
+    kind: str,
+    company_id: int,
+    *,
+    offset: int = 0,
+    is_main_admin: bool = False,
+) -> Rendered | None:
+    """None — якщо тип транспорту невідомий."""
+    if repository.vehicle_model(kind) is None:
+        return None
+
+    vehicles, total = await repository.list_company_vehicles(
+        session, kind, company_id, limit=PAGE_REFERENCE, offset=offset
+    )
+    back = f"{COMPANY_VEHICLES_PREFIX}:{company_id}"
+    title = VEHICLE_TITLES[kind]
+    if not vehicles:
+        return (
+            f"{title}: у цій компанії ще немає жодного запису.",
+            vehicle_list_keyboard(
+                [], kind, company_id, offset=0, total=0, back=back
+            ),
+        )
+
+    header = f"<b>{title}</b> — {_range_note(offset, len(vehicles), total)}"
+    return header, vehicle_list_keyboard(
+        vehicles, kind, company_id, offset=offset, total=total, back=back
     )
 
 
@@ -129,14 +184,13 @@ async def render_companies(session: AsyncSession, *, offset: int = 0) -> Rendere
     if not companies:
         return (
             "Компаній ще немає. Без них ніхто не зможе зареєструватись.",
-            companies_keyboard(),
+            companies_list_keyboard([]),
         )
 
     header = f"<b>Компанії</b> — {_range_note(offset, len(companies), total)}"
-    body = "\n".join(
-        f"#{c.id} — {escape(c.name)} (ЄДРПОУ {escape(c.tax_id)})" for c in companies
+    return f"{header}\nОберіть компанію:", companies_list_keyboard(
+        companies, offset=offset, total=total
     )
-    return f"{header}\n\n{body}", companies_keyboard(offset=offset, total=total)
 
 
 async def render_stats(session: AsyncSession) -> Rendered:

@@ -232,9 +232,10 @@ MENU_BUTTONS = [
     ("«Усі заявки»", "адміни", "Останні 10 заявок усіх користувачів, з автором."),
     ("«Статистика»", "адміни", "Кількість заявок за статусами."),
     ("«Додати автомобіль»", "адміни", "Тягач або причіп; компанія — за роллю."),
-    ("«Користувачі»", "головний адмін", "Список, картка кожного, редагування полів."),
+    ("«Транспорт»", "адмін компанії", "Транспорт своєї компанії: список і картка."),
+    ("«Працівники»", "адмін компанії", "Працівники своєї компанії."),
     ("«Посади»", "головний адмін", "Довідник посад і додавання нових."),
-    ("«Компанії»", "головний адмін", "Список компаній і додавання нових."),
+    ("«Компанії»", "головний адмін", "Компанії, а через них транспорт і працівники."),
     ("«Скасувати»", "усі", "Під кожним кроком анкети — вихід в одне натискання."),
     ("«Видалити #N»", "автор або адмін", "Видаляє заявку і перемальовує список."),
 ]
@@ -407,7 +408,7 @@ def page_route(s: Sheet) -> None:
 
     # ---- нижні панелі ----
     # Жовтий блок вище закінчується на ~418 — панелі мають починатись під ним.
-    panel_top = 424
+    panel_top = 420
     left_w, right_w = 520, 590
 
     ty2 = s.section(M, panel_top, left_w, "керування: inline-кнопки")
@@ -417,11 +418,11 @@ def page_route(s: Sheet) -> None:
     row = ty2 + 14
     for button, who, what in MENU_BUTTONS:
         s.line(M, row, M + left_w, row, color=LINE_SOFT, width=0.6)
-        s.text(M, row + 15, button, font="Sans-Bold", size=8.5, color=INK)
-        s.text(M + 138, row + 15, who, font="Sans", size=8, color=SLATE)
-        end = s.wrap(M + 242, row + 13, left_w - 242, what, size=7.4, leading=9,
+        s.text(M, row + 14, button, font="Sans-Bold", size=8, color=INK)
+        s.text(M + 138, row + 14, who, font="Sans", size=7.6, color=SLATE)
+        end = s.wrap(M + 242, row + 12, left_w - 242, what, size=7.2, leading=8.6,
                      color=INK)
-        row = max(row + 21, end + 2)
+        row = max(row + 20, end + 2)
     s.line(M, row, M + left_w, row, color=LINE_SOFT, width=0.6)
 
     s.wrap(M, row + 16, left_w,
@@ -429,13 +430,15 @@ def page_route(s: Sheet) -> None:
            "захистом — callback_data можна підробити, тому права перевіряються "
            "при кожному виклику. Команди теж лишаються робочими:",
            size=7.8, leading=10)
-    cx, cy = M, row + 44
-    for cmd, label in COMMANDS:
-        w = pdfmetrics.stringWidth(f"{cmd} — {label}", "Mono", 7) + 14
+    # Лише самі команди: що вони роблять, видно з таблиці вище, а два рядки
+    # чипів не вміщуються над футером.
+    cx, cy = M, row + 42
+    for cmd, _label in COMMANDS:
+        w = pdfmetrics.stringWidth(cmd, "Mono", 7) + 14
         if cx + w > M + left_w:
             cx, cy = M, cy + 20
         s.box(cx, cy, w, 15, fill=PANEL_ALT, stroke=LINE_SOFT)
-        s.text(cx + 7, cy + 11, f"{cmd} — {label}", font="Mono", size=7, color=SLATE)
+        s.text(cx + 7, cy + 11, cmd, font="Mono", size=7, color=SLATE)
         cx += w + 6
 
     x_right = M + left_w + 40
