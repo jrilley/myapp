@@ -12,7 +12,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 
 from app.db import Base
 
@@ -142,6 +142,8 @@ class Company(Base):
     address: Mapped[str] = mapped_column(Text, nullable=False, doc="Адреса компанії.")
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="company")
+    trucks: Mapped[list["Truck"]] = relationship(back_populates="company")
+    trailers: Mapped[list["Trailer"]] = relationship(back_populates="company")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Company id={self.id} name={self.name!r}>"
@@ -218,3 +220,54 @@ class Employee(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Employee id={self.id} tg_id={self.tg_id} fullname={self.fullname!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Транспорт
+# ---------------------------------------------------------------------------
+
+
+class VehicleMixin:
+    """Спільні колонки truck і trailer.
+
+    Таблиці однакові за структурою, тож тримаємо її в одному місці —
+    інакше при наступній зміні одна з них відстане від іншої.
+    """
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    brand: Mapped[str] = mapped_column(Text, nullable=False, doc="Марка.")
+    model: Mapped[str] = mapped_column(Text, nullable=False, doc="Модель.")
+    license_plate: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Державний номер."
+    )
+
+    @declared_attr
+    def company_id(cls) -> Mapped[int | None]:
+        # declared_attr обов'язковий: ForeignKey не можна ділити між класами,
+        # для кожної таблиці потрібен свій екземпляр.
+        return mapped_column(
+            ForeignKey("company.id"),
+            doc="Компанія-власник. Nullable — так задано у вихідній схемі.",
+        )
+
+
+class Truck(VehicleMixin, Base):
+    """Тягач."""
+
+    __tablename__ = "truck"
+
+    company: Mapped["Company | None"] = relationship(back_populates="trucks")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Truck id={self.id} plate={self.license_plate!r}>"
+
+
+class Trailer(VehicleMixin, Base):
+    """Причіп."""
+
+    __tablename__ = "trailer"
+
+    company: Mapped["Company | None"] = relationship(back_populates="trailers")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Trailer id={self.id} plate={self.license_plate!r}>"

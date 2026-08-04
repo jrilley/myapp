@@ -616,6 +616,17 @@ ORG_TABLES = {
 }
 
 
+VEHICLE_COLUMNS = [
+    ("id", "INTEGER", "PK"),
+    ("brand", "TEXT NOT NULL", ""),
+    ("model", "TEXT NOT NULL", ""),
+    ("license_plate", "TEXT NOT NULL", ""),
+    ("company_id", "INTEGER", "FK"),
+]
+ORG_TABLES["truck"] = VEHICLE_COLUMNS
+ORG_TABLES["trailer"] = VEHICLE_COLUMNS
+
+
 def page_organization(s: Sheet) -> None:
     s.background()
     M = 40
@@ -626,8 +637,8 @@ def page_organization(s: Sheet) -> None:
            "Реєстрація в боті створює рядок у employees: ПІБ, номер телефону "
            "(кнопкою «Поділитися номером»), необов'язковий другий номер, "
            "компанія та посада з довідників. Роль нового — «Користувач». "
-           "Заявку може подати лише зареєстрований; із заявками (аркуш 2) ці "
-           "таблиці поки не пов'язані.",
+           "Транспорт прив'язаний до компанії; із заявками (аркуш 2) ці таблиці "
+           "поки не пов'язані.",
            size=8.6, leading=11.5)
     s.text(s.W - M, 76, "аркуш 3 / 3", font="Mono", size=8, color=SLATE, align="right")
 
@@ -647,6 +658,17 @@ def page_organization(s: Sheet) -> None:
         right_x, ty, right_w, "employees", ORG_TABLES["employees"], accent=RUST
     )
 
+    # truck і trailer однакові за структурою (у коді — спільний міксин),
+    # тому показуємо одним блоком, а не двома копіями тих самих рядків.
+    vehicle_ty = 396
+    s.entity(
+        right_x, vehicle_ty, right_w, "truck   ·   trailer", VEHICLE_COLUMNS,
+        accent=RUST,
+    )
+    s.text(right_x, vehicle_ty + 138,
+           "дві окремі таблиці з ідентичною структурою; company_id → company.id",
+           font="Sans", size=7.4, color=SLATE)
+
     # Стрілки від FK-колонок employees до відповідних таблиць.
     for column, target in (
         ("company_id", "company"),
@@ -660,7 +682,7 @@ def page_organization(s: Sheet) -> None:
         s.arrow(right_x - 30, to_ty, left_x + left_w, to_ty, color=TEAL, width=1.2,
                 head=5)
 
-    note_ty = 530
+    note_ty = 556
     s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
     s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
     s.wrap(M + 12, note_ty + 18, s.W - 2 * M - 24,
@@ -670,7 +692,7 @@ def page_organization(s: Sheet) -> None:
            "перевіряють — див. tests/test_organization.py.",
            size=8, leading=10.5, color=AMBER)
 
-    ty2 = s.section(M, 610, s.W - 2 * M, "відхилення від вихідного ddl")
+    ty2 = s.section(M, 624, s.W - 2 * M, "відхилення від вихідного ddl")
     s.wrap(M, ty2 + 10, s.W - 2 * M,
            "tg_id оголошено BIGINT, а не INTEGER. У SQLite різниці немає — там "
            "INTEGER і так 64-бітний. Але в PostgreSQL INTEGER 32-бітний, і "
@@ -679,7 +701,7 @@ def page_organization(s: Sheet) -> None:
            "applications.telegram_user_id.",
            size=8, leading=10.5)
 
-    ty3 = s.section(M, 700, s.W - 2 * M, "довідник roles")
+    ty3 = s.section(M, 708, s.W - 2 * M, "довідник roles")
     cx = M
     for name in ("Головний адміністратор", "Адміністратор компанії", "Користувач"):
         w = pdfmetrics.stringWidth(name, "Mono", 7.5) + 16

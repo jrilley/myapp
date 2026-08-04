@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "d0e0be8430ea",
+  "alembic_head": "b1a9300dc911",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -669,6 +669,230 @@
           ],
           "references": [
             "roles.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        }
+      ],
+      "indexes": []
+    },
+    "trailer": {
+      "description": "Причіп.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "brand",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Марка."
+        },
+        {
+          "name": "model",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Модель."
+        },
+        {
+          "name": "license_plate",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Державний номер."
+        },
+        {
+          "name": "company_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "company.id",
+          "description": "Компанія-власник. Nullable — так задано у вихідній схемі."
+        }
+      ],
+      "unique_constraints": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "company_id"
+          ],
+          "references": [
+            "company.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        }
+      ],
+      "indexes": []
+    },
+    "truck": {
+      "description": "Тягач.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "brand",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Марка."
+        },
+        {
+          "name": "model",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Модель."
+        },
+        {
+          "name": "license_plate",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Державний номер."
+        },
+        {
+          "name": "company_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "company.id",
+          "description": "Компанія-власник. Nullable — так задано у вихідній схемі."
+        }
+      ],
+      "unique_constraints": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "company_id"
+          ],
+          "references": [
+            "company.id"
           ],
           "on_delete": null,
           "on_update": null

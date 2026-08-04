@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.models import Company, Employee, Position, Role
+from app.models import Company, Employee, Position, Role, Trailer, Truck
 
 
 async def _fixtures(session):
@@ -115,6 +115,74 @@ async def test_reference_names_are_unique(session, model, field, value):
     session.add(model(**{field: value}))
     with pytest.raises(IntegrityError):
         await session.commit()
+
+
+@pytest.mark.parametrize("model", [Truck, Trailer])
+async def test_vehicle_belongs_to_a_company(session, model):
+    company, _, _ = await _fixtures(session)
+
+    vehicle = model(
+        brand="Renault", model="Magnum", license_plate="AA1234BB", company_id=company.id
+    )
+    session.add(vehicle)
+    await session.commit()
+
+    loaded = await session.scalar(
+        select(model).options(selectinload(model.company))
+    )
+    assert loaded.company.name == "ТОВ Ромашка"
+
+
+@pytest.mark.parametrize("model", [Truck, Trailer])
+async def test_vehicle_company_is_optional(session, model):
+    """У вихідній схемі company_id без NOT NULL — техніка може бути
+    не прив'язана до компанії."""
+    vehicle = model(brand="DAF", model="XF", license_plate="BC5678CD")
+    session.add(vehicle)
+    await session.commit()
+
+    assert vehicle.id is not None
+    assert vehicle.company_id is None
+
+
+@pytest.mark.parametrize("model", [Truck, Trailer])
+async def test_vehicle_company_must_exist(session, model):
+    vehicle = model(
+        brand="Scania", model="R450", license_plate="CD9012DE", company_id=9999
+    )
+    session.add(vehicle)
+
+    with pytest.raises(IntegrityError):
+        await session.commit()
+
+
+@pytest.mark.parametrize("model", [Truck, Trailer])
+@pytest.mark.parametrize("missing", ["brand", "model", "license_plate"])
+async def test_vehicle_required_fields(session, model, missing):
+    values = {"brand": "MAN", "model": "TGX", "license_plate": "DE3456EF"}
+    values.pop(missing)
+    session.add(model(**values))
+
+    with pytest.raises(IntegrityError):
+        await session.commit()
+
+
+async def test_trucks_and_trailers_are_separate_tables(session):
+    """Спільний міксин не має злити їх в одну таблицю."""
+    company, _, _ = await _fixtures(session)
+    session.add(Truck(brand="Volvo", model="FH", license_plate="AA0001AA",
+                      company_id=company.id))
+    session.add(Trailer(brand="Schmitz", model="SKO", license_plate="AA0002AA",
+                        company_id=company.id))
+    await session.commit()
+
+    loaded = await session.scalar(
+        select(Company).options(
+            selectinload(Company.trucks), selectinload(Company.trailers)
+        )
+    )
+    assert [t.license_plate for t in loaded.trucks] == ["AA0001AA"]
+    assert [t.license_plate for t in loaded.trailers] == ["AA0002AA"]
 
 
 async def test_tg_id_survives_a_real_telegram_id(session):
