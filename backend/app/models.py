@@ -10,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
@@ -238,8 +239,20 @@ class VehicleMixin:
     brand: Mapped[str] = mapped_column(Text, nullable=False, doc="Марка.")
     model: Mapped[str] = mapped_column(Text, nullable=False, doc="Модель.")
     license_plate: Mapped[str] = mapped_column(
-        Text, nullable=False, doc="Державний номер."
+        Text,
+        nullable=False,
+        doc="Державний номер, унікальний у межах своєї таблиці.",
     )
+
+    @declared_attr
+    def __table_args__(cls) -> tuple:
+        # Ім'я задаємо явно: безіменне обмеження неможливо зняти в downgrade,
+        # а в SQLite будь-яка зміна обмежень — це перебудова таблиці.
+        return (
+            UniqueConstraint(
+                "license_plate", name=f"uq_{cls.__tablename__}_license_plate"
+            ),
+        )
 
     @declared_attr
     def company_id(cls) -> Mapped[int | None]:

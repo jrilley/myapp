@@ -157,6 +157,28 @@ async def test_vehicle_company_must_exist(session, model):
 
 
 @pytest.mark.parametrize("model", [Truck, Trailer])
+async def test_license_plate_is_unique(session, model):
+    session.add(model(brand="Volvo", model="FH", license_plate="AA1111AA"))
+    await session.commit()
+
+    session.add(model(brand="Scania", model="R450", license_plate="AA1111AA"))
+    with pytest.raises(IntegrityError):
+        await session.commit()
+
+
+async def test_truck_and_trailer_may_share_a_plate(session):
+    """Обмеження діє в межах своєї таблиці: тягач і причіп — різні
+    реєстри, збіг номера між ними не є конфліктом."""
+    session.add(Truck(brand="Volvo", model="FH", license_plate="AA2222AA"))
+    session.add(Trailer(brand="Schmitz", model="SKO", license_plate="AA2222AA"))
+
+    await session.commit()
+
+    assert await session.scalar(select(Truck.id)) is not None
+    assert await session.scalar(select(Trailer.id)) is not None
+
+
+@pytest.mark.parametrize("model", [Truck, Trailer])
 @pytest.mark.parametrize("missing", ["brand", "model", "license_plate"])
 async def test_vehicle_required_fields(session, model, missing):
     values = {"brand": "MAN", "model": "TGX", "license_plate": "DE3456EF"}

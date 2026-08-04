@@ -620,7 +620,7 @@ VEHICLE_COLUMNS = [
     ("id", "INTEGER", "PK"),
     ("brand", "TEXT NOT NULL", ""),
     ("model", "TEXT NOT NULL", ""),
-    ("license_plate", "TEXT NOT NULL", ""),
+    ("license_plate", "TEXT NOT NULL", "UQ"),
     ("company_id", "INTEGER", "FK"),
 ]
 ORG_TABLES["truck"] = VEHICLE_COLUMNS
