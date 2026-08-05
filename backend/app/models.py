@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -141,6 +142,14 @@ class Company(Base):
         Text, nullable=False, unique=True, doc="Податковий номер, унікальний."
     )
     address: Mapped[str] = mapped_column(Text, nullable=False, doc="Адреса компанії.")
+    company_chat_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        doc=(
+            "Робочий чат компанії в Telegram, куди бот дублює створені рейси. "
+            "Порожній — чат ще не заведено, рейси нікуди не дублюються. "
+            "BigInteger: id груп від'ємні й не вміщуються в int32."
+        ),
+    )
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="company")
     trucks: Mapped[list["Truck"]] = relationship(back_populates="company")
@@ -156,17 +165,14 @@ ROLE_MAIN_ADMIN = "Головний адміністратор"
 ROLE_COMPANY_ADMIN = "Адміністратор компанії"
 ROLE_USER = "Користувач"
 
-#: Посади, які дають адміністрування компанії. Список потрібен лише для сіду
-#: нових БД: після нього зв'язок «посада → роль» живе в positions.role_id,
-#: і головний адмін міняє його кнопкою, а не правкою коду.
-ADMIN_POSITIONS = ("Директор", "Менеджер", "Логіст")
-
-#: Посада-заглушка: ставиться, коли справжня невідома. Прав не дає.
-FALLBACK_POSITION = "Інше"
+#: Посади, які людина може обрати сама при реєстрації. Список потрібен лише
+#: для сіду нових БД: далі ознака живе в positions.self_service, і головний
+#: адмін міняє її кнопкою, а не правкою коду.
+SELF_SERVICE_POSITIONS = ("Водій", "Диспетчер", "Оператор")
 
 
 class Position(Base):
-    """Довідник посад. Посада визначає роль доступу."""
+    """Довідник посад."""
 
     __tablename__ = "positions"
 
@@ -174,16 +180,17 @@ class Position(Base):
     position: Mapped[str] = mapped_column(
         Text, nullable=False, unique=True, doc="Назва посади, унікальна."
     )
-    role_id: Mapped[int] = mapped_column(
-        ForeignKey("roles.id"),
+    self_service: Mapped[bool] = mapped_column(
+        Boolean,
         nullable=False,
+        default=False,
+        server_default="0",
         doc=(
-            "Роль доступу, яку дає ця посада. Саме звідси береться "
-            "employees.role_id при реєстрації та при зміні посади."
+            "Чи може людина обрати цю посаду сама при реєстрації. Керівні "
+            "посади призначає головний адміністратор, тож тут False."
         ),
     )
 
-    role: Mapped["Role"] = relationship(back_populates="positions")
     employees: Mapped[list["Employee"]] = relationship(back_populates="position")
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -191,7 +198,12 @@ class Position(Base):
 
 
 class Role(Base):
-    """Довідник ролей доступу."""
+    """Довідник ролей доступу.
+
+    Роль не пов'язана з посадою: її призначає головний адміністратор вручну.
+    Так підвищення прав лишається свідомою дією людини, а не наслідком
+    того, що комусь поміняли підпис у довіднику.
+    """
 
     __tablename__ = "roles"
 
@@ -201,7 +213,6 @@ class Role(Base):
     )
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="role")
-    positions: Mapped[list["Position"]] = relationship(back_populates="role")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Role id={self.id} role={self.role!r}>"
@@ -240,10 +251,8 @@ class Employee(Base):
         ForeignKey("roles.id"),
         nullable=False,
         doc=(
-            "Діюча роль доступу. Проставляється з positions.role_id при "
-            "реєстрації та при зміні посади; головний адмін може перевизначити "
-            "вручну — саме так видається «Головний адміністратор», якого не дає "
-            "жодна посада."
+            "Роль доступу. При реєстрації завжди «Користувач»; підвищує її "
+            "головний адміністратор вручну. З посадою не пов'язана."
         ),
     )
 
@@ -395,6 +404,19 @@ class Trip(Base):
     )
 
     grain_type: Mapped[str] = mapped_column(Text, nullable=False, doc="Культура, яку везуть.")
+
+    # Водія обирають зі співробітників компанії, але не завжди: рейс може
+    # виконувати найманий перевізник, якого в employees немає. Тому FK
+    # необов'язковий, а ПІБ і телефон лишаються обов'язковими — вони і є
+    # документом. Та сама пара «зв'язок + копія», що й у логіста.
+    driver_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"),
+        doc=(
+            "Водій-співробітник, якщо його обрали зі списку. Порожній для "
+            "стороннього водія. Саме за цим полем водій бачить свій рейс і "
+            "отримує сповіщення."
+        ),
+    )
     driver_fullname: Mapped[str] = mapped_column(Text, nullable=False, doc="ПІБ водія.")
     driver_phone_number: Mapped[str] = mapped_column(Text, nullable=False, doc="Телефон водія.")
 
@@ -451,11 +473,23 @@ class Trip(Base):
         Text, nullable=False, default=TRIP_STATUS_NEW, doc="Статус рейсу."
     )
 
+    # Куди продубльовано рейс. Chat id зберігаємо разом із message_id, а не
+    # беремо з company: робочий чат компанії могли змінити, і тоді правка
+    # пішла б у новий чат, а повідомлення висить у старому.
+    chat_id: Mapped[int | None] = mapped_column(
+        BigInteger, doc="Робочий чат, у який продубльовано рейс."
+    )
+    chat_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="Без нього неможливо прибрати повідомлення з чату при видаленні рейсу.",
+    )
+
     # foreign_keys обов'язковий: на company і на employees звідси веде
     # більш ніж один FK, і SQLAlchemy сама не вгадає, який із них чий.
     client_company: Mapped["Company"] = relationship(foreign_keys=[client_company_id])
     exporter_company: Mapped["Company"] = relationship(foreign_keys=[exporter_company_id])
     creator: Mapped["Employee"] = relationship(foreign_keys=[created_by])
+    driver: Mapped["Employee | None"] = relationship(foreign_keys=[driver_id])
 
     __table_args__ = (
         # Під основний запит списку: живі рейси, найближчі за датою прибуття.

@@ -34,8 +34,10 @@ from app.bot.handlers.trips import (
     edit_value,
     step_arrival_date,
     step_confirm,
-    step_driver,
+    step_driver_manual,
+    step_driver_name,
     step_driver_phone,
+    step_driver_pick,
     step_exporter,
     step_grain,
     step_trailer,
@@ -53,6 +55,8 @@ from app.bot.keyboards import (
     TRIP_CONFIRM,
     TRIP_DATE_PREFIX,
     TRIP_DELETE_PREFIX,
+    TRIP_DRIVER_MANUAL,
+    TRIP_DRIVER_PREFIX,
     TRIP_EDIT_PREFIX,
     TRIP_EXPORTER_PREFIX,
     TRIP_FIELD_PREFIX,
@@ -71,6 +75,8 @@ from tests.conftest import (
 )
 
 CHIEF_ID = 4004
+DRIVER_ID = 5005
+OUR_CHAT_ID = -1001111111111
 
 
 @pytest.fixture
@@ -83,7 +89,10 @@ def state() -> FSMContext:
 @pytest.fixture
 async def world(session):
     """Дві компанії й чотири співробітники з різними ролями."""
-    ours = Company(name="Alebor IT", tax_id="000000", address="VST")
+    ours = Company(
+        name="Alebor IT", tax_id="000000", address="VST",
+        company_chat_id=OUR_CHAT_ID,
+    )
     theirs = Company(name="ТОВ Чужа", tax_id="99999999", address="Львів")
     session.add_all(
         [
@@ -93,8 +102,8 @@ async def world(session):
             Role(id=3, role=ROLE_USER),
             # Посада дає роль: диспетчер — звичайний користувач, логіст —
             # адміністратор компанії.
-            Position(id=1, position="Диспетчер", role_id=3),
-            Position(id=2, position="Логіст", role_id=2),
+            Position(id=1, position="Диспетчер", self_service=True),
+            Position(id=2, position="Логіст"),
         ]
     )
     await session.commit()
@@ -112,6 +121,7 @@ async def world(session):
         boss=await employee(ADMIN_ID, ours, "Олег Логіст", "+380502223344", 2, 2),
         # Головного адміністратора не дає жодна посада — його призначають вручну.
         chief=await employee(CHIEF_ID, ours, "Головний Адмін", "+380509998877", 2, 1),
+        driver=await employee(DRIVER_ID, ours, "Петро Водій", "+380507778899", 1, 3),
         outsider=await employee(
             STRANGER_ID, theirs, "Чужий Диспетчер", "+380503334455", 1, 3
         ),
@@ -167,6 +177,24 @@ async def make_trip(session, creator, exporter, **overrides):
     return await repository.create_trip(session, **payload)
 
 
+async def fill_form_until_driver(state, session, access, exporter_id, *, grain="Пшениця"):
+    """Анкета до кроку вибору водія. `grain=None` зупиняє перед культурою —
+    щоб тест сам подав повідомлення й побачив список водіїв."""
+    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, access)
+    await step_ttn(FakeMessage("ТТН-000123"), state)
+    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+    await step_exporter(
+        FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
+    )
+    await step_truck(FakeMessage("Volvo FH16"), state)
+    await step_truck_plate(FakeMessage("aa1111aa"), state)
+    await step_trailer(FakeMessage("Schmitz SKO24"), state)
+    await step_trailer_type(FakeMessage("зерновоз"), state)
+    await step_trailer_plate(FakeMessage("cc3333cc"), state)
+    if grain is not None:
+        await step_grain(FakeMessage(grain), state, session)
+
+
 async def fill_form(state, session, access, **overrides):
     """Проходить анкету до підтвердження включно й повертає callback підтвердження."""
     steps = {
@@ -196,9 +224,17 @@ async def fill_form(state, session, access, **overrides):
     await step_trailer(FakeMessage(steps["trailer"]), state)
     await step_trailer_type(FakeMessage(steps["trailer_type"]), state)
     await step_trailer_plate(FakeMessage(steps["trailer_plate"]), state)
-    await step_grain(FakeMessage(steps["grain"]), state)
-    await step_driver(FakeMessage(steps["driver"]), state)
-    await step_driver_phone(FakeMessage(steps["driver_phone"]), state, session)
+    await step_grain(FakeMessage(steps["grain"]), state, session)
+
+    driver_id = overrides.get("driver_id")
+    if driver_id is None:
+        await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state)
+        await step_driver_name(FakeMessage(steps["driver"]), state)
+        await step_driver_phone(FakeMessage(steps["driver_phone"]), state, session)
+    else:
+        await step_driver_pick(
+            FakeCallback(f"{TRIP_DRIVER_PREFIX}:{driver_id}"), state, session
+        )
     return FakeCallback(TRIP_CONFIRM, user=FakeUser(OWNER_ID))
 
 
@@ -207,10 +243,12 @@ async def fill_form(state, session, access, **overrides):
 # ---------------------------------------------------------------------------
 
 
-async def test_form_creates_a_trip_with_every_field(session, state, world, logist):
+async def test_form_creates_a_trip_with_every_field(
+    session, state, world, logist, publisher
+):
     callback = await fill_form(state, session, logist, exporter_id=world.theirs.id)
 
-    await step_confirm(callback, state, session, logist)
+    await step_confirm(callback, state, session, publisher, logist)
 
     trips, total = await repository.list_trips(session)
     assert total == 1
@@ -227,11 +265,13 @@ async def test_form_creates_a_trip_with_every_field(session, state, world, logis
     assert await state.get_state() is None
 
 
-async def test_client_and_logist_come_from_the_creator(session, state, world, logist):
+async def test_client_and_logist_come_from_the_creator(
+    session, state, world, logist, publisher
+):
     """Ці поля не питаються — підставити чужу компанію нічим."""
     callback = await fill_form(state, session, logist, exporter_id=world.theirs.id)
 
-    await step_confirm(callback, state, session, logist)
+    await step_confirm(callback, state, session, publisher, logist)
 
     trips, _ = await repository.list_trips(session)
     trip = trips[0]
@@ -243,10 +283,12 @@ async def test_client_and_logist_come_from_the_creator(session, state, world, lo
     assert trip.logist_tg == OWNER_ID
 
 
-async def test_new_trip_starts_empty_and_unaudited(session, state, world, logist):
+async def test_new_trip_starts_empty_and_unaudited(
+    session, state, world, logist, publisher
+):
     callback = await fill_form(state, session, logist, exporter_id=world.ours.id)
 
-    await step_confirm(callback, state, session, logist)
+    await step_confirm(callback, state, session, publisher, logist)
 
     trips, _ = await repository.list_trips(session)
     trip = trips[0]
@@ -328,6 +370,173 @@ async def test_unknown_date_is_rejected(session, state, world, logist):
 
     assert callback.answered == ["Невідома дата"]
     assert await state.get_state() == TripForm.arrival_date
+
+
+# ---------------------------------------------------------------------------
+# Водій і розсилка
+# ---------------------------------------------------------------------------
+
+
+async def test_driver_is_picked_from_the_company(
+    session, state, world, logist, publisher
+):
+    """Вибір зі списку дає зв'язок, а ПІБ і телефон копіюються в рейс:
+    він документ і має лишитись читабельним, якщо людина піде з компанії."""
+    callback = await fill_form(
+        state, session, logist,
+        exporter_id=world.theirs.id, driver_id=world.driver.id,
+    )
+
+    await step_confirm(callback, state, session, publisher, logist)
+
+    trips, _ = await repository.list_trips(session)
+    trip = trips[0]
+    assert trip.driver_id == world.driver.id
+    assert trip.driver_fullname == "Петро Водій"
+    assert trip.driver_phone_number == "+380507778899"
+
+
+async def test_manual_driver_leaves_no_link(session, state, world, logist, publisher):
+    """Сторонній перевізник у employees не значиться — FK лишається порожнім."""
+    callback = await fill_form(state, session, logist, exporter_id=world.theirs.id)
+
+    await step_confirm(callback, state, session, publisher, logist)
+
+    trips, _ = await repository.list_trips(session)
+    assert trips[0].driver_id is None
+    assert trips[0].driver_fullname == "Іван Іванович Іваненко"
+
+
+async def test_driver_from_another_company_is_refused(session, state, world, logist):
+    """Кнопки чужого співробітника немає, але callback_data можна підробити."""
+    await fill_form_until_driver(state, session, logist, world.theirs.id)
+    callback = FakeCallback(f"{TRIP_DRIVER_PREFIX}:{world.outsider.id}")
+
+    await step_driver_pick(callback, state, session)
+
+    assert callback.answered == ["Невідомий співробітник"]
+    assert await state.get_state() == TripForm.driver
+
+
+async def test_driver_list_offers_the_company_and_manual_entry(
+    session, state, world, logist
+):
+    """У списку — свої співробітники, крім самого логіста; поруч завжди
+    ручний ввід, бо рейс може виконувати найманий перевізник."""
+    await fill_form_until_driver(state, session, logist, world.theirs.id, grain=None)
+    message = FakeMessage("Пшениця")
+    await step_grain(message, state, session)
+
+    labels = [b.text for row in message.markups[-1].inline_keyboard for b in row]
+    data = callback_data(message.markups[-1])
+    assert "Диспетчер, Петро Водій" in labels
+    assert TRIP_DRIVER_MANUAL in data
+    # Себе логіст у списку не бачить, чужу компанію — теж.
+    assert not any("Марія Диспетчер" in label for label in labels)
+    assert not any("Чужий" in label for label in labels)
+
+
+async def test_driver_is_notified_and_chat_gets_a_copy(
+    session, state, world, logist, publisher
+):
+    callback = await fill_form(
+        state, session, logist,
+        exporter_id=world.theirs.id, driver_id=world.driver.id,
+    )
+
+    await step_confirm(callback, state, session, publisher, logist)
+
+    targets = [chat_id for chat_id, _ in publisher.sent]
+    assert DRIVER_ID in targets
+    assert OUR_CHAT_ID in targets
+    driver_text = next(text for chat, text in publisher.sent if chat == DRIVER_ID)
+    assert "Вам призначено рейс" in driver_text
+    # message_id збережено — без нього рейс не прибрати з чату при видаленні.
+    trips, _ = await repository.list_trips(session)
+    assert trips[0].chat_id == OUR_CHAT_ID
+    assert trips[0].chat_message_id == publisher.message_id
+
+
+async def test_unreachable_driver_does_not_lose_the_trip(
+    session, state, world, logist, publisher
+):
+    """Telegram не дасть писати тому, хто не запускав бота. Рейс уже в базі —
+    але логіст має дізнатись, що водій його не отримав."""
+    publisher.unreachable.add(DRIVER_ID)
+    callback = await fill_form(
+        state, session, logist,
+        exporter_id=world.theirs.id, driver_id=world.driver.id,
+    )
+
+    await step_confirm(callback, state, session, publisher, logist)
+
+    _, total = await repository.list_trips(session)
+    assert total == 1
+    assert "не вдалося написати" in callback.message.answers[0]
+
+
+async def test_missing_working_chat_is_reported(
+    session, state, world, logist, publisher
+):
+    await repository.update_company(session, world.ours, company_chat_id=None)
+    callback = await fill_form(state, session, logist, exporter_id=world.theirs.id)
+
+    await step_confirm(callback, state, session, publisher, logist)
+
+    _, total = await repository.list_trips(session)
+    assert total == 1
+    assert publisher.sent == []
+    assert "Робочий чат компанії не вказано" in callback.message.answers[0]
+
+
+async def test_driver_sees_the_trip_assigned_to_them(session, world, logist, publisher):
+    driver_access = await access_for(session, DRIVER_ID)
+    await make_trip(
+        session, world.logist, world.theirs, ttn_num="МІЙ-РЕЙС",
+        driver_id=world.driver.id,
+    )
+    await make_trip(session, world.logist, world.theirs, ttn_num="ЧУЖИЙ-РЕЙС")
+
+    text, _ = await render_trips(session, driver_access)
+
+    assert "МІЙ-РЕЙС" in text
+    assert "ЧУЖИЙ-РЕЙС" not in text
+
+
+async def test_driver_may_look_but_not_edit(session, state, world):
+    """Рейс водієві видали — це завдання, а не його документ."""
+    driver_access = await access_for(session, DRIVER_ID)
+    trip = await make_trip(
+        session, world.logist, world.theirs, driver_id=world.driver.id
+    )
+
+    card = FakeCallback(f"{TRIP_SHOW_PREFIX}:{trip.id}", user=FakeUser(DRIVER_ID))
+    await on_trip_card(card, state, session, driver_access)
+    assert card.message.answers
+    # Кнопок редагування водієві не показуємо…
+    assert f"{TRIP_EDIT_PREFIX}:{trip.id}" not in callback_data(card.message.markups[0])
+
+    # …і підроблений callback_data теж не проходить.
+    edit = FakeCallback(f"{TRIP_FIELD_PREFIX}:grain:{trip.id}", user=FakeUser(DRIVER_ID))
+    await on_trip_field(edit, state, session, driver_access)
+    assert edit.answered == [DENIED]
+
+
+async def test_delete_clears_the_chat_and_tells_the_driver(
+    session, world, logist, publisher
+):
+    trip = await make_trip(
+        session, world.logist, world.theirs, driver_id=world.driver.id
+    )
+    await repository.set_trip_chat_message(
+        session, trip, chat_id=OUR_CHAT_ID, message_id=777
+    )
+    callback = FakeCallback(f"{TRIP_DELETE_PREFIX}:{trip.id}", user=FakeUser(OWNER_ID))
+
+    await on_trip_delete(callback, session, publisher, logist)
+
+    assert publisher.retracted == [(OUR_CHAT_ID, 777)]
+    assert any(chat == DRIVER_ID and "скасовано" in text for chat, text in publisher.sent)
 
 
 # ---------------------------------------------------------------------------
@@ -528,12 +737,14 @@ async def test_editing_a_foreign_trip_is_refused(session, state, logist, trips):
 # ---------------------------------------------------------------------------
 
 
-async def test_delete_marks_the_row_instead_of_erasing_it(session, logist, trips):
+async def test_delete_marks_the_row_instead_of_erasing_it(
+    session, logist, trips, publisher
+):
     callback = FakeCallback(
         f"{TRIP_DELETE_PREFIX}:{trips.mine.id}", user=FakeUser(OWNER_ID)
     )
 
-    await on_trip_delete(callback, session, logist)
+    await on_trip_delete(callback, session, publisher, logist)
 
     assert await repository.get_trip(session, trips.mine.id) is None
     kept = await repository.get_trip(session, trips.mine.id, include_deleted=True)
@@ -560,12 +771,12 @@ async def test_trips_scroll_in_place(session, chief, world):
     assert not callback.message.answers  # редагуємо, а не шлемо нове
 
 
-async def test_foreign_trip_cannot_be_deleted(session, logist, trips):
+async def test_foreign_trip_cannot_be_deleted(session, logist, trips, publisher):
     callback = FakeCallback(
         f"{TRIP_DELETE_PREFIX}:{trips.foreign.id}", user=FakeUser(OWNER_ID)
     )
 
-    await on_trip_delete(callback, session, logist)
+    await on_trip_delete(callback, session, publisher, logist)
 
     assert callback.answered == [DENIED]
     assert await repository.get_trip(session, trips.foreign.id) is not None

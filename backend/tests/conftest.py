@@ -145,6 +145,10 @@ class FakePublisher:
     def __init__(self) -> None:
         self.published: list[int] = []
         self.retracted: list[tuple[int, int]] = []
+        self.sent: list[tuple[int, str]] = []
+        #: Куди «не вдалося» надіслати — так перевіряється, що збій розсилки
+        #: не ламає дію користувача.
+        self.unreachable: set[int] = set()
         self.chat_id = -1001234567890
         self.message_id = 555
 
@@ -152,8 +156,16 @@ class FakePublisher:
         self.published.append(application.id)
         return self.chat_id, self.message_id
 
-    async def retract(self, chat_id: int, message_id: int) -> None:
+    async def retract(
+        self, chat_id: int, message_id: int, *, note: str | None = None
+    ) -> None:
         self.retracted.append((chat_id, message_id))
+
+    async def send(self, chat_id: int, text: str) -> int | None:
+        if chat_id in self.unreachable:
+            return None
+        self.sent.append((chat_id, text))
+        return self.message_id
 
 
 @pytest.fixture

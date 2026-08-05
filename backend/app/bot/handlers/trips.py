@@ -5,8 +5,9 @@
 підставити чужу компанію неможливо навіть підміною callback_data.
 
 Хто що бачить і чіпає, вирішує роль: головний адмін — усі рейси, адміністратор
-компанії — рейси своєї компанії, решта — власні. Перевірка живе в `_may_touch`
-і викликається в кожному хендлері: сховати кнопку — не захист.
+компанії — рейси своєї компанії, решта — власні й ті, де вони водії.
+Перевірка живе в `_may_view` / `_may_edit` і викликається в кожному
+хендлері: сховати кнопку — не захист.
 """
 
 from datetime import date, datetime
@@ -41,6 +42,8 @@ from app.bot.keyboards import (
     TRIP_CONFIRM,
     TRIP_DATE_PREFIX,
     TRIP_DELETE_PREFIX,
+    TRIP_DRIVER_MANUAL,
+    TRIP_DRIVER_PREFIX,
     TRIP_EDIT_PREFIX,
     TRIP_EXPORTER_PREFIX,
     TRIP_FIELD_PREFIX,
@@ -50,9 +53,11 @@ from app.bot.keyboards import (
     cancel_keyboard,
     trip_card_keyboard,
     trip_confirm_keyboard,
+    trip_drivers_keyboard,
     trip_exporter_keyboard,
     trip_fields_keyboard,
 )
+from app.bot.publisher import Publisher
 from app.bot.states import TripEdit, TripForm
 from app.models import Trip
 
@@ -106,8 +111,9 @@ PROMPTS = {
 # ---------------------------------------------------------------------------
 
 
-def _may_touch(access: Access, trip: Trip) -> bool:
-    """Чи дозволено цьому користувачу бачити й змінювати цей рейс."""
+def _may_edit(access: Access, trip: Trip) -> bool:
+    """Хто може змінювати й видаляти рейс: головний адмін, адміністратор
+    компанії-замовника та той, хто рейс створив."""
     if access.is_main_admin:
         return True
     employee = access.employee
@@ -122,14 +128,36 @@ def _may_touch(access: Access, trip: Trip) -> bool:
     return employee.id is not None and employee.id == trip.created_by
 
 
+def _may_view(access: Access, trip: Trip) -> bool:
+    """Ті самі плюс водій рейсу.
+
+    Водій бачить, але не редагує: рейс — це завдання, яке йому видали, а не
+    його документ. Час заїзду й виїзду поки ставить логіст.
+    """
+    if _may_edit(access, trip):
+        return True
+    employee = access.employee
+    return (
+        employee is not None
+        and employee.id is not None
+        and employee.id == trip.driver_id
+    )
+
+
 async def _trip_or_denied(
-    callback: CallbackQuery, session: AsyncSession, access: Access, trip_id: int
+    callback: CallbackQuery,
+    session: AsyncSession,
+    access: Access,
+    trip_id: int,
+    *,
+    for_edit: bool = True,
 ) -> Trip | None:
     trip = await repository.get_trip(session, trip_id)
     if trip is None:
         await callback.answer("Рейс не знайдено", show_alert=True)
         return None
-    if not _may_touch(access, trip):
+    allowed = _may_edit(access, trip) if for_edit else _may_view(access, trip)
+    if not allowed:
         await callback.answer(DENIED, show_alert=True)
         return None
     return trip
@@ -357,18 +385,75 @@ async def step_trailer_plate(message: Message, state: FSMContext) -> None:
 
 
 @router.message(TripForm.grain, F.text)
-async def step_grain(message: Message, state: FSMContext) -> None:
+async def step_grain(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
     value = (message.text or "").strip()
     if error := _short_text(value):
         await message.answer(error, reply_markup=cancel_keyboard())
         return
     await state.update_data(grain_type=value)
+    await _ask_driver(message, state, session)
+
+
+async def _ask_driver(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    """Список водіїв компанії. Порожній список не тупик: ручний ввід поруч."""
+    data = await state.get_data()
+    employees, _ = await repository.list_company_employees(
+        session, data["client_company_id"], limit=50
+    )
+    # Себе зі списку прибираємо: логіст, який сам себе везе, — це або помилка,
+    # або той рідкісний випадок, для якого лишається ручний ввід.
+    candidates = [e for e in employees if e.id != data["created_by"]]
+
     await state.set_state(TripForm.driver)
-    await message.answer("ПІБ водія:", reply_markup=cancel_keyboard())
+    await message.answer(
+        "Оберіть водія:" if candidates
+        else "У компанії немає інших зареєстрованих співробітників.",
+        reply_markup=trip_drivers_keyboard(candidates),
+    )
 
 
-@router.message(TripForm.driver, F.text)
-async def step_driver(message: Message, state: FSMContext) -> None:
+@router.callback_query(TripForm.driver, F.data == TRIP_DRIVER_MANUAL)
+async def step_driver_manual(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(driver_id=None)
+    await state.set_state(TripForm.driver_name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer("ПІБ водія:", reply_markup=cancel_keyboard())
+
+
+@router.callback_query(TripForm.driver, F.data.startswith(f"{TRIP_DRIVER_PREFIX}:"))
+async def step_driver_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    employee = (
+        await repository.get_employee(session, int(raw_id)) if raw_id.isdigit() else None
+    )
+    data = await state.get_data()
+    # Компанію звіряємо заново: id співробітника приходить у callback_data,
+    # і без перевірки водієм можна було б призначити людину з чужої компанії.
+    if employee is None or employee.company_id != data["client_company_id"]:
+        await callback.answer("Невідомий співробітник", show_alert=True)
+        return
+
+    # ПІБ і телефон копіюємо в рейс: він документ і має лишитись читабельним,
+    # навіть якщо людина потім змінить прізвище чи піде з компанії.
+    await state.update_data(
+        driver_id=employee.id,
+        driver_fullname=employee.fullname,
+        driver_phone_number=employee.phone_number,
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await _show_summary(callback.message, state, session)
+
+
+@router.message(TripForm.driver_name, F.text)
+async def step_driver_name(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     if error := _short_text(value):
         await message.answer(error, reply_markup=cancel_keyboard())
@@ -391,6 +476,12 @@ async def step_driver_phone(
         return
 
     await state.update_data(driver_phone_number=value)
+    await _show_summary(message, state, session)
+
+
+async def _show_summary(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
     await state.set_state(TripForm.confirm)
     data = await state.get_data()
 
@@ -410,13 +501,61 @@ TRIP_COLUMNS = (
     "ttn_num", "arrival_date", "client_company_id", "exporter_company_id",
     "created_by", "logist_fullname", "logist_phone_number", "logist_tg",
     "truck", "truck_license_plate", "trailer", "trailer_type",
-    "trailer_license_plate", "grain_type", "driver_fullname", "driver_phone_number",
+    "trailer_license_plate", "grain_type", "driver_id", "driver_fullname",
+    "driver_phone_number",
 )
+
+
+async def _announce(session: AsyncSession, publisher: Publisher, trip: Trip) -> str:
+    """Розсилає створений рейс і повертає рядок про те, що вийшло.
+
+    Рейс уже в базі, тож жоден збій тут його не скасовує: Telegram буває
+    недоступний, водій міг не запускати бота, бота могли прибрати з групи.
+    Але мовчати про це не можна — логіст має знати, що водій не отримав
+    рейсу, інакше він вважатиме, що все дійшло.
+    """
+    notes = []
+
+    driver = trip.driver
+    if driver is not None:
+        sent = await publisher.send(
+            driver.tg_id, f"🆕 <b>Вам призначено рейс</b>\n\n{format_trip(trip)}"
+        )
+        notes.append(
+            "Водія сповіщено." if sent is not None
+            else "⚠️ Водієві не вдалося написати — можливо, він ще не "
+                 "запускав бота або заблокував його."
+        )
+    else:
+        notes.append("Водій сторонній — сповіщення не надсилалось.")
+
+    chat_id = trip.client_company.company_chat_id if trip.client_company else None
+    if chat_id is None:
+        notes.append("Робочий чат компанії не вказано — рейс нікуди не дубльовано.")
+    else:
+        message_id = await publisher.send(
+            chat_id, f"🆕 <b>Новий рейс</b>\n\n{format_trip(trip)}"
+        )
+        if message_id is None:
+            notes.append(
+                "⚠️ У робочий чат не вдалося — перевірте, чи бот доданий у групу."
+            )
+        else:
+            await repository.set_trip_chat_message(
+                session, trip, chat_id=chat_id, message_id=message_id
+            )
+            notes.append("Продубльовано в робочий чат.")
+
+    return "\n".join(notes)
 
 
 @router.callback_query(TripForm.confirm, F.data == TRIP_CONFIRM)
 async def step_confirm(
-    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    publisher: Publisher,
+    access: Access,
 ) -> None:
     data = await state.get_data()
     await state.clear()
@@ -434,10 +573,11 @@ async def step_confirm(
         return
 
     trip = await repository.create_trip(
-        session, **{name: data[name] for name in TRIP_COLUMNS}
+        session, **{name: data.get(name) for name in TRIP_COLUMNS}
     )
+    report = await _announce(session, publisher, trip)
     await callback.message.answer(
-        f"✅ Рейс #{trip.id} створено.\n\n{format_trip(trip)}",
+        f"✅ Рейс #{trip.id} створено.\n\n{format_trip(trip)}\n\n{report}",
         reply_markup=after_trip_keyboard(),
     )
 
@@ -467,15 +607,18 @@ async def on_trip_card(
         await callback.answer("Невідомий рейс", show_alert=True)
         return
 
-    trip = await _trip_or_denied(callback, session, access, int(raw_id))
+    trip = await _trip_or_denied(callback, session, access, int(raw_id), for_edit=False)
     if trip is None:
         return
 
     await state.clear()
     await callback.answer()
     if callback.message is not None:
+        # Водієві кнопок редагування не показуємо: вони йому все одно
+        # відмовлять, а зайва кнопка виглядає як помилка системи.
         await callback.message.answer(
-            format_trip(trip), reply_markup=trip_card_keyboard(trip.id)
+            format_trip(trip),
+            reply_markup=trip_card_keyboard(trip.id, editable=_may_edit(access, trip)),
         )
 
 
@@ -632,7 +775,7 @@ async def _editable_trip(
         await state.clear()
         await message.answer("Рейс не знайдено.")
         return None
-    if not _may_touch(access, trip):
+    if not _may_edit(access, trip):
         await state.clear()
         await message.answer(DENIED)
         return None
@@ -711,7 +854,10 @@ async def edit_exporter(
 
 @router.callback_query(F.data.startswith(f"{TRIP_DELETE_PREFIX}:"))
 async def on_trip_delete(
-    callback: CallbackQuery, session: AsyncSession, access: Access
+    callback: CallbackQuery,
+    session: AsyncSession,
+    publisher: Publisher,
+    access: Access,
 ) -> None:
     raw_id = (callback.data or "").rsplit(":", 1)[-1]
     if not raw_id.isdigit():
@@ -722,8 +868,22 @@ async def on_trip_delete(
     if trip is None:
         return
 
+    # Читаємо до видалення: soft_delete_trip робить refresh, після якого
+    # звернення до зв'язків тягне ліниве завантаження.
     trip_id = trip.id
+    chat_id, chat_message_id = trip.chat_id, trip.chat_message_id
+    driver_tg = trip.driver.tg_id if trip.driver is not None else None
+
     await repository.soft_delete_trip(session, trip, deleted_by=_actor_id(access))
+
+    if chat_id is not None and chat_message_id is not None:
+        # Best-effort: збій у Telegram не має скасовувати видалення в базі.
+        await publisher.retract(
+            chat_id, chat_message_id, note=f"🗑 <i>Рейс #{trip_id} скасовано.</i>"
+        )
+    if driver_tg is not None:
+        await publisher.send(driver_tg, f"🗑 Рейс #{trip_id} скасовано.")
+
     await callback.answer(f"🗑 Рейс #{trip_id} видалено")
 
     # Перемальовуємо список на місці, щоб видалений рейс одразу зник.
@@ -739,7 +899,7 @@ async def on_trip_delete(
 @router.message(TripForm.trailer_type)
 @router.message(TripForm.trailer_plate)
 @router.message(TripForm.grain)
-@router.message(TripForm.driver)
+@router.message(TripForm.driver_name)
 @router.message(TripForm.driver_phone)
 @router.message(TripEdit.value)
 async def non_text(message: Message) -> None:

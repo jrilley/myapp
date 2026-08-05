@@ -34,13 +34,11 @@ EMP_VIEW_PREFIX = "emp"
 EMP_EDIT_PREFIX = "empedit"
 EMP_SET_PREFIX = "empset"
 POSITION_ADD = "position:add"
-#: Роль для нової посади (крок анкети) і роль наявної посади (з довідника).
-POSITION_NEW_ROLE_PREFIX = "position:newrole"
+#: Чи можна обрати посаду самостійно: крок анкети нової посади…
+POSITION_NEW_ACCESS_PREFIX = "position:newaccess"
 POSITION_CARD_PREFIX = "position:card"
-#: Відкрити вибір ролі для наявної посади…
-POSITION_SET_ROLE_PREFIX = "position:role"
-#: …і застосувати обране: position:setrole:<посада>:<роль>.
-POSITION_APPLY_ROLE_PREFIX = "position:setrole"
+#: …і зміна в наявній: position:access:<посада>:<0|1>.
+POSITION_SET_ACCESS_PREFIX = "position:access"
 
 MENU_VEHICLE_ADD = "menu:vehicle"
 #: Для адміністратора компанії — власна компанія мається на увазі.
@@ -60,8 +58,13 @@ TRIP_SHOW_PREFIX = "trip:show"
 TRIP_EDIT_PREFIX = "trip:edit"
 TRIP_FIELD_PREFIX = "trip:field"
 TRIP_DELETE_PREFIX = "trip:drop"
+#: Вибір водія: trip:drv:<id співробітника> або trip:drv:manual.
+TRIP_DRIVER_PREFIX = "trip:drv"
+TRIP_DRIVER_MANUAL = "trip:drv:manual"
 
 COMPANY_CARD_PREFIX = "comp"
+COMPANY_EDIT_PREFIX = "compedit"
+COMPANY_CHAT_SKIP = "company:chatskip"
 COMPANY_VEHICLES_PREFIX = "compveh"
 COMPANY_EMPLOYEES_PREFIX = "compemp"
 VEHICLE_LIST_PREFIX = "vlist"
@@ -363,8 +366,27 @@ def company_card_keyboard(company_id: int) -> InlineKeyboardMarkup:
         text="👥 Працівники",
         callback_data=f"{COMPANY_EMPLOYEES_PREFIX}:{company_id}",
     )
+    for field, title in (
+        ("name", "✏️ Назва"),
+        ("tax", "✏️ Код"),
+        ("address", "✏️ Адреса"),
+        ("chat", "💬 Робочий чат"),
+    ):
+        builder.button(
+            text=title, callback_data=f"{COMPANY_EDIT_PREFIX}:{field}:{company_id}"
+        )
     builder.button(text="⬅️ До компаній", callback_data=MENU_COMPANIES)
-    builder.adjust(2, 1)
+    builder.adjust(2, 2, 2, 1)
+    return builder.as_markup()
+
+
+def company_chat_keyboard() -> InlineKeyboardMarkup:
+    """Крок робочого чату при заведенні компанії. Чат могли ще не створити,
+    тож пропуск має бути кнопкою, а не здогадкою про порожній ввід."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Пропустити", callback_data=COMPANY_CHAT_SKIP)
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -419,12 +441,13 @@ def vehicle_card_keyboard(kind: str, vehicle_id: int, back: str) -> InlineKeyboa
 def positions_keyboard(
     positions=(), *, offset: int = 0, total: int | None = None
 ) -> InlineKeyboardMarkup:
-    """Довідник посад: кожна — кнопка, бо посада визначає роль доступу,
-    і цю роль треба мати як переглянути, так і змінити."""
+    """Довідник посад: кожна — кнопка. Підпис каже, чи можна обрати посаду
+    при реєстрації, чи її призначає лише адміністратор."""
     builder = InlineKeyboardBuilder()
     for position in positions:
+        mark = "самостійно" if position.self_service else "лише адмін"
         builder.button(
-            text=f"{position.position} — {position.role.role}",
+            text=f"{position.position} — {mark}",
             callback_data=f"{POSITION_CARD_PREFIX}:{position.id}",
         )
     builder.adjust(1)
@@ -439,22 +462,27 @@ def positions_keyboard(
     return builder.as_markup()
 
 
-def position_roles_keyboard(prefix: str, roles, *, back: str) -> InlineKeyboardMarkup:
-    """Вибір ролі для посади. `prefix` вирішує, куди піде вибір: у нову
-    посаду (крок анкети) чи в наявну (зміна довідника)."""
+def position_access_keyboard(prefix: str, *, back: str) -> InlineKeyboardMarkup:
+    """Так/ні для самостійного вибору посади. `prefix` вирішує, куди піде
+    відповідь: у нову посаду (крок анкети) чи в наявну."""
     builder = InlineKeyboardBuilder()
-    for item_id, title in roles:
-        builder.button(text=title, callback_data=f"{prefix}:{item_id}")
+    builder.button(text="✅ Так, доступна при реєстрації", callback_data=f"{prefix}:1")
+    builder.button(text="🔒 Ні, лише через адміністратора", callback_data=f"{prefix}:0")
     builder.button(text="⬅️ Назад", callback_data=back)
     builder.adjust(1)
     return builder.as_markup()
 
 
-def position_card_keyboard(position_id: int) -> InlineKeyboardMarkup:
+def position_card_keyboard(position_id: int, self_service: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    # Одна кнопка, що перемикає в протилежний бік: показувати обидва варіанти,
+    # один з яких уже діє, — зайвий вибір.
     builder.button(
-        text="🔑 Змінити роль",
-        callback_data=f"{POSITION_SET_ROLE_PREFIX}:{position_id}",
+        text="🔒 Лише через адміністратора" if self_service
+        else "✅ Дозволити при реєстрації",
+        callback_data=(
+            f"{POSITION_SET_ACCESS_PREFIX}:{position_id}:{0 if self_service else 1}"
+        ),
     )
     builder.button(text="⬅️ До посад", callback_data=MENU_POSITIONS)
     builder.adjust(1)
@@ -599,6 +627,21 @@ def trip_exporter_keyboard(companies) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def trip_drivers_keyboard(employees) -> InlineKeyboardMarkup:
+    """Водії — зі складу компанії. Ручний ввід лишається окремою кнопкою:
+    рейс може виконувати найманий перевізник, якого в employees немає."""
+    builder = InlineKeyboardBuilder()
+    for employee in employees:
+        builder.button(
+            text=f"{employee.position.position}, {employee.fullname}",
+            callback_data=f"{TRIP_DRIVER_PREFIX}:{employee.id}",
+        )
+    builder.button(text="✍️ Ввести вручну", callback_data=TRIP_DRIVER_MANUAL)
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def trip_confirm_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Створити рейс", callback_data=TRIP_CONFIRM)
@@ -624,12 +667,18 @@ def trips_keyboard(trips, *, offset: int = 0, total: int | None = None) -> Inlin
     return builder.as_markup()
 
 
-def trip_card_keyboard(trip_id: int) -> InlineKeyboardMarkup:
+def trip_card_keyboard(trip_id: int, *, editable: bool = True) -> InlineKeyboardMarkup:
+    """`editable=False` — для водія: рейс йому видали, а не він його веде."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✏️ Редагувати", callback_data=f"{TRIP_EDIT_PREFIX}:{trip_id}")
-    builder.button(text="🗑 Видалити", callback_data=f"{TRIP_DELETE_PREFIX}:{trip_id}")
+    if editable:
+        builder.button(
+            text="✏️ Редагувати", callback_data=f"{TRIP_EDIT_PREFIX}:{trip_id}"
+        )
+        builder.button(
+            text="🗑 Видалити", callback_data=f"{TRIP_DELETE_PREFIX}:{trip_id}"
+        )
     builder.button(text="⬅️ До рейсів", callback_data=MENU_TRIPS)
-    builder.adjust(2, 1)
+    builder.adjust(2, 1) if editable else builder.adjust(1)
     return builder.as_markup()
 
 

@@ -11,9 +11,11 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
-from app.bot.access import ROLE_COMPANY_ADMIN, ROLE_MAIN_ADMIN, ROLE_USER
+from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER
 from app.bot.handlers.registration import (
     company_address,
+    company_chat,
+    company_chat_skip,
     company_name,
     company_tax_id,
     on_companies,
@@ -31,6 +33,7 @@ from app.bot.handlers.registration import (
 )
 from app.bot.keyboards import (
     CANCEL_TEXT,
+    COMPANY_CHAT_SKIP,
     FORM_CANCEL,
     REG_COMPANY_PREFIX,
     REG_PHONE2_NO,
@@ -63,7 +66,7 @@ def state() -> FSMContext:
 async def reference_data(session):
     """Довідники, без яких реєстрація неможлива."""
     company = Company(name="ТОВ Ромашка", tax_id="12345678", address="Київ")
-    position = Position(id=1, position="Інше", role_id=3)
+    position = Position(id=1, position="Інше", self_service=True)
     session.add_all(
         [
             company,
@@ -115,42 +118,54 @@ async def test_registration_creates_an_employee(
     assert employee.phone_number == "+380671112233"
     assert employee.company_id == company.id
     assert employee.position_id == position.id
-    # Роль дає посада: «Інше» — заглушка, вона не дає нічого понад базове.
+    # Роль при реєстрації завжди базова: підвищує її головний адміністратор.
     assert employee.role.role == ROLE_USER
     assert await state.get_state() is None
 
 
-async def test_role_comes_from_the_chosen_position(
+async def test_only_self_service_positions_are_offered(
     session, state, access_guest, reference_data
 ):
-    """Директор — адмінська посада, тож реєстрація одразу дає адмінські права,
-    без окремого підвищення руками."""
+    """Керівні посади призначає головний адміністратор, тож у списку
+    самостійної реєстрації їх бути не має."""
     company, _ = reference_data
-    session.add(Role(id=2, role=ROLE_COMPANY_ADMIN))
-    await session.commit()
-    director = await repository.create_position(session, name="Директор", role_id=2)
+    await repository.create_position(session, name="Директор", self_service=False)
 
     await on_register(FakeCallback("reg:start"), state, session, access_guest)
-    await _walk_through(state, session, company, director)
-    await step_confirm(
-        FakeCallback("reg:confirm", user=FakeUser(STRANGER_ID)),
-        state, session, access_guest,
+    await step_fullname(FakeMessage("Олена Ковальчук"), state)
+    await step_phone(FakeMessage("+380671112233"), state)
+    await step_phone2_no(FakeCallback(REG_PHONE2_NO), state, session)
+    callback = FakeCallback(f"{REG_COMPANY_PREFIX}:{company.id}")
+    await step_company(callback, state, session)
+
+    labels = [
+        b.text for row in callback.message.markups[0].inline_keyboard for b in row
+    ]
+    assert "Інше" in labels
+    assert "Директор" not in labels
+
+
+async def test_closed_position_is_refused_even_by_id(
+    session, state, access_guest, reference_data
+):
+    """Кнопки немає, але callback_data можна підробити — інакше будь-хто
+    записав би себе директором."""
+    company, _ = reference_data
+    director = await repository.create_position(
+        session, name="Директор", self_service=False
     )
 
-    employee = await repository.get_employee_by_tg_id(session, STRANGER_ID)
-    assert employee.role.role == ROLE_COMPANY_ADMIN
-
-
-async def test_confirmation_shows_the_role_the_position_grants(
-    session, state, access_guest, reference_data
-):
-    company, position = reference_data
     await on_register(FakeCallback("reg:start"), state, session, access_guest)
+    await step_fullname(FakeMessage("Олена Ковальчук"), state)
+    await step_phone(FakeMessage("+380671112233"), state)
+    await step_phone2_no(FakeCallback(REG_PHONE2_NO), state, session)
+    await step_company(FakeCallback(f"{REG_COMPANY_PREFIX}:{company.id}"), state, session)
 
-    callback = await _walk_through(state, session, company, position)
+    callback = FakeCallback(f"{REG_POSITION_PREFIX}:{director.id}")
+    await step_position(callback, state, session)
 
-    # Людина має бачити, які права дасть обрана посада, ще до підтвердження.
-    assert f"<b>Роль доступу:</b> {ROLE_USER}" in callback.message.answers[0]
+    assert callback.answered == ["Невідома посада"]
+    assert await state.get_state() == Registration.position
 
 
 async def test_menu_after_registration_is_the_user_menu(
@@ -359,19 +374,57 @@ async def test_only_main_admin_adds_a_company(state, access):
     assert callback.answered == ["Дія доступна лише головному адміністратору."]
 
 
-async def test_main_admin_creates_a_company(session, state, access_admin):
-    await on_company_add(FakeCallback("company:add", user=FakeUser(ADMIN_ID)), state, access_admin)
+async def _new_company(session, state, access_admin, *, chat: str | None = None):
+    await on_company_add(
+        FakeCallback("company:add", user=FakeUser(ADMIN_ID)), state, access_admin
+    )
     await company_name(FakeMessage("ТОВ Нова"), state)
     await company_tax_id(FakeMessage("87654321"), state, session)
+    await company_address(FakeMessage("Львів, вул. Січових Стрільців, 5"), state)
 
-    message = FakeMessage("Львів, вул. Січових Стрільців, 5")
-    await company_address(message, state, session, access_admin)
+    if chat is None:
+        callback = FakeCallback(COMPANY_CHAT_SKIP, user=FakeUser(ADMIN_ID))
+        await company_chat_skip(callback, state, session, access_admin)
+        return callback.message
+    message = FakeMessage(chat)
+    await company_chat(message, state, session, access_admin)
+    return message
+
+
+async def test_main_admin_creates_a_company(session, state, access_admin):
+    message = await _new_company(session, state, access_admin, chat="-1001234567890")
 
     companies = await repository.list_companies(session)
     assert [c.name for c in companies] == ["ТОВ Нова"]
     assert companies[0].tax_id == "87654321"
+    assert companies[0].company_chat_id == -1001234567890
     assert await state.get_state() is None
-    assert "додано" in message.answers[0]
+    assert "додано" in message.answers[-1]
+
+
+async def test_working_chat_can_be_skipped(session, state, access_admin):
+    """Чат могли ще не створити — це не має блокувати заведення компанії."""
+    message = await _new_company(session, state, access_admin)
+
+    companies = await repository.list_companies(session)
+    assert companies[0].company_chat_id is None
+    assert "не вказано" in message.answers[-1]
+
+
+async def test_garbage_chat_id_keeps_the_step(session, state, access_admin):
+    await on_company_add(
+        FakeCallback("company:add", user=FakeUser(ADMIN_ID)), state, access_admin
+    )
+    await company_name(FakeMessage("ТОВ Нова"), state)
+    await company_tax_id(FakeMessage("87654321"), state, session)
+    await company_address(FakeMessage("Львів, вул. Січових Стрільців, 5"), state)
+
+    message = FakeMessage("моя група")
+    await company_chat(message, state, session, access_admin)
+
+    assert await state.get_state() == CompanyForm.chat
+    assert "Не схоже на id чату" in message.answers[0]
+    assert await repository.list_companies(session) == []
 
 
 async def test_duplicate_tax_id_is_caught_before_asking_address(

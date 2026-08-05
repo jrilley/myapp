@@ -1,8 +1,9 @@
 """Реєстрація співробітника та заведення компаній.
 
-Реєстрація обов'язкова: без рядка в employees заявку подати не можна.
-Роль не питається й не задається за замовчуванням — її дає обрана посада
-(`positions.role_id`).
+Реєстрація обов'язкова: без рядка в employees рейс не створити.
+Роль новому співробітнику завжди «Користувач»: підвищує її головний
+адміністратор вручну. Посади пропонуються лише самообслуговувані —
+керівні призначає теж він.
 """
 
 from aiogram import F, Router
@@ -11,7 +12,7 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.access import Access
+from app.bot.access import ROLE_USER, Access
 from app.bot.actions import render_companies
 from app.bot.constants import (
     MAX_ADDRESS,
@@ -20,10 +21,12 @@ from app.bot.constants import (
     MAX_PHONE,
     MAX_TAX_ID,
     MIN_PHONE,
+    parse_chat_id,
 )
 from app.bot.keyboards import (
     CANCEL_TEXT,
     COMPANY_ADD,
+    COMPANY_CHAT_SKIP,
     MENU_COMPANIES,
     REG_COMPANY_PREFIX,
     REG_CONFIRM,
@@ -33,6 +36,7 @@ from app.bot.keyboards import (
     REG_START,
     cancel_keyboard,
     choices_keyboard,
+    company_chat_keyboard,
     main_menu_keyboard,
     phone2_keyboard,
     registration_confirm_keyboard,
@@ -213,14 +217,25 @@ async def step_company(
     await state.set_state(Registration.position)
     await callback.answer()
 
-    positions = await repository.list_positions(session)
-    if callback.message is not None:
+    # Лише самообслуговувані посади: керівні призначає головний адміністратор,
+    # інакше будь-хто записав би себе директором.
+    positions = await repository.list_positions(session, self_service_only=True)
+    if callback.message is None:
+        return
+    if not positions:
+        await state.clear()
         await callback.message.answer(
-            "Оберіть посаду:",
-            reply_markup=choices_keyboard(
-                REG_POSITION_PREFIX, [(p.id, p.position) for p in positions]
-            ),
+            "Реєстрація поки неможлива: у довіднику немає жодної посади, "
+            "доступної для самостійного вибору.\n"
+            "Зверніться до головного адміністратора.",
         )
+        return
+    await callback.message.answer(
+        "Оберіть посаду:",
+        reply_markup=choices_keyboard(
+            REG_POSITION_PREFIX, [(p.id, p.position) for p in positions]
+        ),
+    )
 
 
 @router.callback_query(
@@ -233,7 +248,9 @@ async def step_position(
     position = (
         await repository.get_position(session, int(raw_id)) if raw_id.isdigit() else None
     )
-    if position is None:
+    # Перевіряємо не лише існування, а й доступність: callback_data можна
+    # підробити, і тоді людина записала б себе на керівну посаду.
+    if position is None or not position.self_service:
         await callback.answer("Невідома посада", show_alert=True)
         return
 
@@ -250,8 +267,7 @@ async def step_position(
             f"<b>Телефон:</b> {data['phone_number']}\n"
             + (f"<b>Додатковий:</b> {extra}\n" if extra else "")
             + f"<b>Компанія:</b> {data['company_name']}\n"
-            f"<b>Посада:</b> {data['position_name']}\n"
-            f"<b>Роль доступу:</b> {position.role.role}",
+            f"<b>Посада:</b> {data['position_name']}",
             reply_markup=registration_confirm_keyboard(),
         )
 
@@ -277,13 +293,24 @@ async def step_confirm(
         )
         return
 
-    # Роль дає посада. Перечитуємо посаду замість того, щоб брати роль зі
-    # стану: поки анкета була відкрита, головний адмін міг змінити довідник.
+    # Перечитуємо посаду: поки анкета була відкрита, головний адмін міг
+    # прибрати її з довідника або закрити для самостійного вибору.
     position = await repository.get_position(session, data["position_id"])
-    if position is None:
+    if position is None or not position.self_service:
         await callback.message.answer(
-            "Обраної посади більше немає в довіднику. Почніть реєстрацію заново.",
+            "Обрана посада більше недоступна для самостійного вибору. "
+            "Почніть реєстрацію заново.",
             reply_markup=_menu(access),
+        )
+        return
+
+    # Роль завжди базова. Підвищує її головний адміністратор вручну —
+    # так підвищення прав лишається свідомою дією людини.
+    role = await repository.get_role_by_name(session, ROLE_USER)
+    if role is None:
+        await callback.message.answer(
+            "Не вдалося завершити реєстрацію: у довіднику ролей немає "
+            f"«{ROLE_USER}». Зверніться до адміністратора."
         )
         return
 
@@ -295,7 +322,7 @@ async def step_confirm(
         phone_number=data["phone_number"],
         phone_number2=data.get("phone_number2"),
         position_id=position.id,
-        role_id=position.role_id,
+        role_id=role.id,
     )
 
     # Access у data застарів — його порахували до створення рядка.
@@ -389,9 +416,7 @@ async def company_tax_id(
 
 
 @router.message(CompanyForm.address, F.text)
-async def company_address(
-    message: Message, state: FSMContext, session: AsyncSession, access: Access
-) -> None:
+async def company_address(message: Message, state: FSMContext) -> None:
     value = (message.text or "").strip()
     if not 4 <= len(value) <= MAX_ADDRESS:
         await message.answer(
@@ -400,15 +425,79 @@ async def company_address(
         )
         return
 
+    await state.update_data(address=value)
+    await state.set_state(CompanyForm.chat)
+    await message.answer(CHAT_PROMPT, reply_markup=company_chat_keyboard())
+
+
+#: Пояснення до кроку робочого чату. Довге навмисно: id групи не лежить на
+#: видноті, і без підказки людина застрягає саме тут.
+CHAT_PROMPT = (
+    "<b>Робочий чат компанії</b>\n\n"
+    "Надішліть id чату, куди бот дублюватиме створені рейси.\n\n"
+    "Як його дізнатись: додайте бота в групу, зробіть адміністратором і "
+    "перешліть у нього будь-яке повідомлення з тієї групи — або скористайтесь "
+    "@getidsbot. Id групи виглядає як <code>-1001234567890</code>.\n\n"
+    "Якщо чату ще немає — пропустіть, його можна вказати пізніше в картці "
+    "компанії."
+)
+
+
+async def _finish_company(
+    message: Message, state: FSMContext, session: AsyncSession, access: Access,
+    chat_id: int | None,
+) -> None:
     data = await state.get_data()
     await state.clear()
+
+    # Код могли зайняти, поки анкета була відкрита.
+    if await repository.get_company_by_tax_id(session, data["tax_id"]):
+        await message.answer(
+            f"Компанія з кодом {data['tax_id']} уже є. Спробуйте ще раз.",
+            reply_markup=_menu(access),
+        )
+        return
+
     company = await repository.create_company(
-        session, name=data["name"], tax_id=data["tax_id"], address=value
+        session,
+        name=data["name"],
+        tax_id=data["tax_id"],
+        address=data["address"],
+        company_chat_id=chat_id,
+    )
+    note = (
+        f"\nРобочий чат: <code>{chat_id}</code>."
+        if chat_id is not None
+        else "\nРобочий чат не вказано — рейси нікуди не дублюватимуться."
     )
     await message.answer(
-        f"✅ Компанію «{company.name}» додано (#{company.id}).",
+        f"✅ Компанію «{company.name}» додано (#{company.id}).{note}",
         reply_markup=_menu(access),
     )
+
+
+@router.message(CompanyForm.chat, F.text)
+async def company_chat(
+    message: Message, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    chat_id = parse_chat_id(message.text or "")
+    if chat_id is None:
+        await message.answer(
+            "Не схоже на id чату. Очікую ціле число, зазвичай від'ємне — "
+            "наприклад <code>-1001234567890</code>.",
+            reply_markup=company_chat_keyboard(),
+        )
+        return
+    await _finish_company(message, state, session, access, chat_id)
+
+
+@router.callback_query(CompanyForm.chat, F.data == COMPANY_CHAT_SKIP)
+async def company_chat_skip(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await _finish_company(callback.message, state, session, access, None)
 
 
 @router.message(Registration.fullname)
@@ -416,6 +505,7 @@ async def company_address(
 @router.message(CompanyForm.name)
 @router.message(CompanyForm.tax_id)
 @router.message(CompanyForm.address)
+@router.message(CompanyForm.chat)
 async def non_text(message: Message) -> None:
     await message.answer(
         "Надішліть, будь ласка, текст.", reply_markup=cancel_keyboard()

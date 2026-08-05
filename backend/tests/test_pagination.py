@@ -235,7 +235,7 @@ async def test_reference_lists_paginate(session):
     session.add(Role(id=1, role=ROLE_MAIN_ADMIN))
     session.add(Role(id=3, role=ROLE_USER))
     for index in range(PAGE_REFERENCE + 2):
-        session.add(Position(position=f"Посада {index:02d}", role_id=3))
+        session.add(Position(position=f"Посада {index:02d}"))
         session.add(
             Company(name=f"Компанія {index:02d}", tax_id=f"{index:08d}", address="Київ")
         )

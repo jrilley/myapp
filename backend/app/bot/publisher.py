@@ -2,7 +2,7 @@ import logging
 from typing import Protocol
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 
 from app.bot.formatting import format_for_group
 from app.models import Application
@@ -11,19 +11,39 @@ logger = logging.getLogger(__name__)
 
 
 class Publisher(Protocol):
-    """Абстракція над відправкою в групу — щоб тести не ходили в мережу."""
+    """Абстракція над відправкою в Telegram — щоб тести не ходили в мережу."""
 
     async def publish(self, application: Application) -> tuple[int, int] | None:
         """Повертає (chat_id, message_id) або None, якщо публікація не вдалась."""
 
-    async def retract(self, chat_id: int, message_id: int) -> None:
+    async def retract(
+        self, chat_id: int, message_id: int, *, note: str | None = None
+    ) -> None:
         """Прибрати опубліковане повідомлення (best-effort)."""
+
+    async def send(self, chat_id: int, text: str) -> int | None:
+        """Надіслати текст у довільний чат: робочий чат компанії або приватний
+        чат водія. Повертає message_id або None, якщо не дійшло."""
 
 
 class TelegramPublisher:
     def __init__(self, bot: Bot, chat_id: int | None) -> None:
         self._bot = bot
         self._chat_id = chat_id
+
+    async def send(self, chat_id: int, text: str) -> int | None:
+        try:
+            message = await self._bot.send_message(chat_id, text)
+        except TelegramForbiddenError:
+            # Найчастіший випадок, і не помилка як така: людина не натискала
+            # /start або заблокувала бота, або бота прибрали з чату. Telegram
+            # не дозволяє писати першим — тут нічого не зробиш кодом.
+            logger.warning("Немає доступу до чату %s — повідомлення не надіслано", chat_id)
+            return None
+        except TelegramAPIError:
+            logger.exception("Не вдалося надіслати повідомлення в чат %s", chat_id)
+            return None
+        return message.message_id
 
     async def publish(self, application: Application) -> tuple[int, int] | None:
         if self._chat_id is None:
@@ -39,7 +59,9 @@ class TelegramPublisher:
             return None
         return self._chat_id, message.message_id
 
-    async def retract(self, chat_id: int, message_id: int) -> None:
+    async def retract(
+        self, chat_id: int, message_id: int, *, note: str | None = None
+    ) -> None:
         """Telegram дозволяє боту видаляти повідомлення в групі лише ~48 годин.
         Після цього вікна відкочуємось на редагування тексту."""
         try:
@@ -50,7 +72,7 @@ class TelegramPublisher:
 
         try:
             await self._bot.edit_message_text(
-                "🗑 <i>Заявку видалено.</i>",
+                note or "🗑 <i>Заявку видалено.</i>",
                 chat_id=chat_id,
                 message_id=message_id,
             )
@@ -65,5 +87,10 @@ class NullPublisher:
     async def publish(self, application: Application) -> tuple[int, int] | None:
         return None
 
-    async def retract(self, chat_id: int, message_id: int) -> None:
+    async def retract(
+        self, chat_id: int, message_id: int, *, note: str | None = None
+    ) -> None:
+        return None
+
+    async def send(self, chat_id: int, text: str) -> int | None:
         return None

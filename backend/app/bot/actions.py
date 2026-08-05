@@ -232,8 +232,10 @@ async def render_trips(
     else:
         if access.employee.id is None:
             return NOT_REGISTERED, back_to_menu_keyboard()
+        # Свої — це і створені, і ті, де людина водій: рейс їй видали, і
+        # побачити його вона має так само, як той, що завела сама.
         trips, total = await repository.list_trips(
-            session, created_by=access.employee.id, limit=PAGE_TRIPS, offset=offset
+            session, participant_id=access.employee.id, limit=PAGE_TRIPS, offset=offset
         )
         title = "Мої рейси"
 

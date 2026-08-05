@@ -31,6 +31,15 @@ class CompanyForm(StatesGroup):
     name = State()
     tax_id = State()
     address = State()
+    #: Робочий чат може бути ще не створений, тож крок пропускається кнопкою.
+    chat = State()
+
+
+class CompanyEdit(StatesGroup):
+    """Редагування компанії з її картки. Стан один на всі текстові поля:
+    що саме редагуємо — лежить у даних FSM."""
+
+    value = State()
 
 
 class EmployeeEdit(StatesGroup):
@@ -45,12 +54,12 @@ class EmployeeEdit(StatesGroup):
 class PositionForm(StatesGroup):
     """Додавання посади в довідник.
 
-    Роль питаємо одразу: посада без ролі не має сенсу — саме вона визначає,
-    які права отримає той, кого на цю посаду призначать.
+    Другим кроком питаємо, чи можна обрати цю посаду при самостійній
+    реєстрації: керівні посади має призначати адміністратор.
     """
 
     name = State()
-    role = State()
+    self_service = State()
 
 
 class VehicleForm(StatesGroup):
@@ -92,7 +101,10 @@ class TripForm(StatesGroup):
     trailer_type = State()
     trailer_plate = State()
     grain = State()
+    #: Водія обирають зі складу компанії…
     driver = State()
+    #: …або вводять руками, якщо це сторонній перевізник.
+    driver_name = State()
     driver_phone = State()
     confirm = State()
 

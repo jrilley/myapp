@@ -46,7 +46,7 @@ from _sheet import (  # noqa: E402
 # квадратами. У самому боті кнопки, звісно, з піктограмами.
 MENU_BUTTONS = [
     ("«Зареєструватися»", "гості", "Анкета реєстрації: рядок у employees."),
-    ("«Новий рейс»", "зареєстровані", "Рейс за ТТН, 11 кроків — аркуш 4."),
+    ("«Новий рейс»", "зареєстровані", "Рейс за ТТН, десять кроків — аркуш 4."),
     ("«Рейси»", "зареєстровані", "Свої рейси; адмінам — компанії або всі."),
     ("«Нова заявка»", "зареєстровані", "Починає анкету з першого кроку."),
     ("«Мої заявки»", "зареєстровані", "Свої заявки, до 10, з кнопкою видалення."),
@@ -423,11 +423,12 @@ ORG_TABLES = {
         ("name", "TEXT NOT NULL", ""),
         ("tax_id", "TEXT NOT NULL", "UQ"),
         ("address", "TEXT NOT NULL", ""),
+        ("company_chat_id", "BIGINT", ""),
     ],
     "positions": [
         ("id", "INTEGER", "PK"),
         ("position", "TEXT NOT NULL", "UQ"),
-        ("role_id", "INTEGER NOT NULL", "FK"),
+        ("self_service", "BOOLEAN NOT NULL", ""),
     ],
     "roles": [
         ("id", "INTEGER", "PK"),
@@ -466,8 +467,8 @@ def page_organization(s: Sheet) -> None:
     s.wrap(M, 96, 660,
            "Реєстрація в боті створює рядок у employees: ПІБ, номер телефону "
            "(кнопкою «Поділитися номером»), необов'язковий другий номер, "
-           "компанія та посада з довідників. Роль не питається — її дає обрана "
-           "посада. Транспорт прив'язаний до компанії. Рейси (аркуш 4) "
+           "компанія та посада з довідників. Роль завжди «Користувач»: підвищує "
+           "її головний адміністратор. Транспорт прив'язаний до компанії. Рейси (аркуш 4) "
            "посилаються і на company, і на employees; із заявками (аркуш 2) ці "
            "таблиці не пов'язані.",
            size=8.6, leading=11.5)
@@ -513,14 +514,6 @@ def page_organization(s: Sheet) -> None:
         s.arrow(right_x - 30, to_ty, left_x + left_w, to_ty, color=TEAL, width=1.2,
                 head=5)
 
-    # positions.role_id → roles.id. Ведемо ліворуч від колонки, щоб не
-    # перетинати стрілки від employees, які приходять справа.
-    pos_ty = bottoms["positions"]["role_id"]
-    roles_ty = bottoms["roles"]["id"]
-    s.line(left_x, pos_ty, left_x - 16, pos_ty, color=TEAL, width=1.2)
-    s.line(left_x - 16, pos_ty, left_x - 16, roles_ty, color=TEAL, width=1.2)
-    s.arrow(left_x - 16, roles_ty, left_x, roles_ty, color=TEAL, width=1.2, head=5)
-
     note_ty = 556
     s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
     s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
@@ -540,11 +533,11 @@ def page_organization(s: Sheet) -> None:
            "applications.telegram_user_id.",
            size=8, leading=10.5)
 
-    ty3 = s.section(M, 700, s.W - 2 * M, "посада визначає роль")
+    ty3 = s.section(M, 700, s.W - 2 * M, "посада й роль розведені")
     for i, (left, right) in enumerate((
-        ("Директор, Менеджер, Логіст", "Адміністратор компанії"),
-        ("решта посад, зокрема заглушка «Інше»", "Користувач"),
-        ("жодна посада", "Головний адміністратор — лише вручну, з картки співробітника"),
+        ("Водій, Диспетчер, Оператор", "self_service — людина обирає їх сама при реєстрації"),
+        ("Директор, Менеджер, Логіст", "призначає головний адміністратор"),
+        ("роль доступу", "лише вручну, з картки співробітника; від посади не залежить"),
     )):
         row_ty = ty3 + 12 + i * 16
         s.text(M, row_ty, left, font="Sans-Bold", size=8, color=INK)
@@ -573,6 +566,7 @@ TRIP_ENTERED = [
     ("trailer_type", "TEXT NOT NULL", ""),
     ("trailer_license_plate", "TEXT NOT NULL", ""),
     ("grain_type", "TEXT NOT NULL", ""),
+    ("driver_id", "INTEGER", "FK"),
     ("driver_fullname", "TEXT NOT NULL", ""),
     ("driver_phone_number", "TEXT NOT NULL", ""),
 ]
@@ -584,6 +578,7 @@ TRIP_DERIVED = [
     ("logist_fullname", "TEXT NOT NULL", ""),
     ("logist_phone_number", "TEXT NOT NULL", ""),
     ("logist_tg", "BIGINT NOT NULL", ""),
+    ("created_at", "TEXT NOT NULL", ""),
     ("status", "TEXT NOT NULL", ""),
 ]
 
@@ -597,6 +592,8 @@ TRIP_LATER = [
     ("updated_at", "TEXT", ""),
     ("deleted_by", "INTEGER", "FK"),
     ("deleted_at", "TEXT", ""),
+    ("chat_id", "BIGINT", ""),
+    ("chat_message_id", "INTEGER", ""),
 ]
 
 TRIP_STEPS = [
@@ -609,13 +606,14 @@ TRIP_STEPS = [
     ("07", "Тип причепа", "зерновоз, самоскид"),
     ("08", "Номер причепа", "не такий, як у тягача"),
     ("09", "Культура", "текст"),
-    ("10", "ПІБ водія", "текст"),
-    ("11", "Телефон водія", "6-32 символи"),
+    ("10", "Водій", "зі складу компанії"),
+    ("11", "або вручну", "ПІБ і телефон"),
     ("12", "Перевірка", "«Створити рейс»"),
 ]
 
 VISIBILITY = [
-    ("Користувач", "лише власні рейси — ті, де created_by це він"),
+    ("Користувач", "власні рейси — created_by або driver_id це він"),
+    ("Водій рейсу", "бачить, але не редагує: рейс йому видали"),
     ("Адміністратор компанії", "рейси своєї компанії: client_company_id = його company_id"),
     ("Головний адміністратор", "усі рейси"),
 ]
@@ -628,10 +626,12 @@ def page_trip(s: Sheet) -> None:
     s.eyebrow(M, 46, "myapp · схема системи", color=TEAL)
     s.text(M, 76, "Рейс", font="Sans-Bold", size=25, color=INK)
     s.wrap(M, 96, 700,
-           "Рейс заводить логіст — 11 кроків у боті й підтвердження. Компанію-"
-           "замовника та контакти логіста бот не питає: вони беруться з рядка "
-           "employees того, хто заповнює форму, тож підставити чужу компанію "
-           "нічим. Решта колонок заповнюється вже після створення.",
+           "Рейс заводить логіст: десять кроків і підтвердження. Компанію-замовника "
+           "та контакти логіста бот не питає — вони беруться з рядка employees "
+           "того, хто заповнює форму, тож підставити чужу компанію нічим. Водія "
+           "обирають зі складу компанії; для стороннього перевізника лишається "
+           "ручний ввід, і тоді кроків одинадцять. Решта колонок заповнюється "
+           "вже після створення.",
            size=8.6, leading=11.5)
     s.text(s.W - M, 76, "аркуш 4 / 4", font="Mono", size=8, color=SLATE, align="right")
 
@@ -646,7 +646,7 @@ def page_trip(s: Sheet) -> None:
     s.entity(xs[1], ty, col_w, "trips  ·  з employees", TRIP_DERIVED, accent=RUST)
     s.entity(xs[2], ty, col_w, "trips  ·  службові", TRIP_LATER, accent=RUST)
 
-    ty2 = s.section(M, 452, s.W - 2 * M, "порядок кроків")
+    ty2 = s.section(M, 466, s.W - 2 * M, "порядок кроків")
     chip_w = (s.W - 2 * M - 5 * 10) / 6
     for i, (num, title, rule) in enumerate(TRIP_STEPS):
         cx = M + (i % 6) * (chip_w + 10)
@@ -657,15 +657,16 @@ def page_trip(s: Sheet) -> None:
         s.text(cx + 32, cy + 18, title, font="Sans-Bold", size=8.5, color=INK)
         s.text(cx + 32, cy + 33, rule, font="Mono", size=7, color=SLATE)
 
-    note_ty = 596
-    s.box(M, note_ty, s.W - 2 * M, 50, fill=AMBER_SOFT, stroke=AMBER_SOFT)
-    s.line(M, note_ty, M, note_ty + 50, color=AMBER, width=2.5)
+    note_ty = 604
+    s.box(M, note_ty, s.W - 2 * M, 48, fill=AMBER_SOFT, stroke=AMBER_SOFT)
+    s.line(M, note_ty, M, note_ty + 48, color=AMBER, width=2.5)
     s.wrap(M + 12, note_ty + 18, s.W - 2 * M - 24,
            "Відхилення від вихідного опису. client_company та exporter_company "
            "оголошені INTEGER із зовнішнім ключем, а не TEXT: у полі лежить "
            "company.id, і зв'язок має бути справжнім. edited_by лишили nullable — "
            "NOT NULL суперечив би вимозі «при створенні порожнє». Додано "
-           "logist_tg, щоб із рейсу можна було написати логісту в Telegram.",
+           "logist_tg, щоб із рейсу можна було написати логісту, і driver_id — "
+           "щоб було кого сповістити.",
            size=8, leading=10.5, color=AMBER)
 
     ty3 = s.section(M, 668, s.W - 2 * M, "хто які рейси бачить")
@@ -675,8 +676,9 @@ def page_trip(s: Sheet) -> None:
 
     s.line(M, s.H - 34, s.W - M, s.H - 34, color=LINE, width=0.6)
     s.text(M, s.H - 22,
-           "Видалення рейсу не стирає рядок: у deleted_by та deleted_at пишемо, "
-           "хто і коли це зробив. Те саме при редагуванні — edited_by, updated_at.",
+           "Створений рейс іде водієві в приват і в робочий чат компанії "
+           "(company.company_chat_id). Збій розсилки рейсу не скасовує — "
+           "логісту про це повідомляється.",
            font="Mono", size=7, color=SLATE)
 
 

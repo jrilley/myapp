@@ -6,12 +6,11 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import (
-    ROLE_MAIN_ADMIN,
     Application,
     ApplicationStatus,
     Company,
@@ -276,63 +275,79 @@ async def get_company_by_tax_id(session: AsyncSession, tax_id: str) -> Company |
 
 
 async def create_company(
-    session: AsyncSession, *, name: str, tax_id: str, address: str
+    session: AsyncSession,
+    *,
+    name: str,
+    tax_id: str,
+    address: str,
+    company_chat_id: int | None = None,
 ) -> Company:
-    company = Company(name=name, tax_id=tax_id, address=address)
+    company = Company(
+        name=name, tax_id=tax_id, address=address, company_chat_id=company_chat_id
+    )
     session.add(company)
     await session.commit()
     await session.refresh(company)
     return company
 
 
-async def list_positions(session: AsyncSession) -> list[Position]:
-    """Повний список — для клавіатури вибору посади.
+async def update_company(session: AsyncSession, company: Company, **fields) -> Company:
+    for name, value in fields.items():
+        setattr(company, name, value)
+    await session.commit()
+    await session.refresh(company)
+    return company
 
-    Роль тягнемо одразу: посада без ролі майже ніде не потрібна, а ліниве
-    завантаження в async-сесії кидає MissingGreenlet.
-    """
-    return list(
-        await session.scalars(
-            select(Position).options(selectinload(Position.role)).order_by(Position.id)
-        )
-    )
+
+async def list_positions(
+    session: AsyncSession, *, self_service_only: bool = False
+) -> list[Position]:
+    """Повний список посад; із `self_service_only` — лише ті, які людина
+    може обрати сама при реєстрації."""
+    stmt = select(Position).order_by(Position.id)
+    if self_service_only:
+        stmt = stmt.where(Position.self_service.is_(True))
+    return list(await session.scalars(stmt))
 
 
 async def page_positions(
     session: AsyncSession, *, limit: int = 10, offset: int = 0
 ) -> tuple[list[Position], int]:
     total = await session.scalar(select(func.count()).select_from(Position))
-    stmt = (
-        select(Position)
-        .options(selectinload(Position.role))
-        .order_by(Position.id)
-        .limit(limit)
-        .offset(offset)
-    )
+    stmt = select(Position).order_by(Position.id).limit(limit).offset(offset)
     return list(await session.scalars(stmt)), int(total or 0)
 
 
 async def get_position(session: AsyncSession, position_id: int) -> Position | None:
-    return await session.scalar(
-        select(Position)
-        .where(Position.id == position_id)
-        .options(selectinload(Position.role))
-    )
+    return await session.get(Position, position_id)
 
 
 async def get_position_by_name(session: AsyncSession, name: str) -> Position | None:
-    return await session.scalar(
-        select(Position)
-        .where(Position.position == name)
-        .options(selectinload(Position.role))
-    )
+    return await session.scalar(select(Position).where(Position.position == name))
 
 
-async def create_position(session: AsyncSession, *, name: str, role_id: int) -> Position:
-    position = Position(position=name, role_id=role_id)
+async def create_position(
+    session: AsyncSession, *, name: str, self_service: bool = False
+) -> Position:
+    position = Position(position=name, self_service=self_service)
     session.add(position)
     await session.commit()
-    return await get_position(session, position.id)
+    await session.refresh(position)
+    return position
+
+
+async def set_position_self_service(
+    session: AsyncSession, position: Position, value: bool
+) -> Position:
+    """Чи можна обрати цю посаду при самостійній реєстрації.
+
+    Ролей не чіпає: роль призначає головний адміністратор вручну, і зміна
+    довідника посад не має тихо міняти чиїсь права.
+    """
+    position.self_service = value
+    await session.commit()
+    await session.refresh(position)
+    return position
 
 
 async def count_position_employees(session: AsyncSession, position_id: int) -> int:
@@ -344,34 +359,6 @@ async def count_position_employees(session: AsyncSession, position_id: int) -> i
         )
         or 0
     )
-
-
-async def set_position_role(
-    session: AsyncSession, position: Position, role_id: int
-) -> tuple[Position, int]:
-    """Міняє роль посади й підтягує за нею ролі співробітників.
-
-    Повертає (посада, скільки співробітників зачепило). Оновлення масове й
-    навмисне: сенс positions.role_id саме в тому, що роль іде за посадою —
-    інакше після зміни довідника люди лишились би зі старими правами.
-
-    Головних адміністраторів не чіпаємо: цю роль дає не посада, а людина,
-    тож і знімати її має людина. Інакше зміна довідника могла б випадково
-    зняти доступ з єдиного власника системи.
-    """
-    position_id = position.id
-    position.role_id = role_id
-
-    main_admin = await get_role_by_name(session, ROLE_MAIN_ADMIN)
-    stmt = update(Employee).where(
-        Employee.position_id == position_id, Employee.role_id != role_id
-    )
-    if main_admin is not None:
-        stmt = stmt.where(Employee.role_id != main_admin.id)
-    result = await session.execute(stmt.values(role_id=role_id))
-    await session.commit()
-
-    return await get_position(session, position_id), result.rowcount or 0
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +488,7 @@ def _trip_with_links():
         selectinload(Trip.client_company),
         selectinload(Trip.exporter_company),
         selectinload(Trip.creator),
+        selectinload(Trip.driver),
     )
 
 
@@ -530,11 +518,14 @@ async def list_trips(
     session: AsyncSession,
     *,
     company_id: int | None = None,
-    created_by: int | None = None,
+    participant_id: int | None = None,
     limit: int = 5,
     offset: int = 0,
 ) -> tuple[list[Trip], int]:
     """Сторінка рейсів і загальна кількість під ті самі фільтри.
+
+    `participant_id` — рейси, до яких людина причетна: створила або їде як
+    водій. Саме «або»: водій свій рейс не створював, але бачити його має.
 
     Фільтри звужують видимість, тож ніколи не приходять із callback_data
     напряму — їх обчислює `actions.render_trips` за роллю викликача.
@@ -542,8 +533,10 @@ async def list_trips(
     filters = [Trip.deleted_at.is_(None)]
     if company_id is not None:
         filters.append(Trip.client_company_id == company_id)
-    if created_by is not None:
-        filters.append(Trip.created_by == created_by)
+    if participant_id is not None:
+        filters.append(
+            or_(Trip.created_by == participant_id, Trip.driver_id == participant_id)
+        )
 
     total = await session.scalar(select(func.count()).select_from(Trip).where(*filters))
     stmt = (
@@ -578,6 +571,17 @@ async def update_trip(
     # exporter_company_id сама по собі не перечитала б exporter_company.
     session.expire(trip)
     return await get_trip(session, trip_id)
+
+
+async def set_trip_chat_message(
+    session: AsyncSession, trip: Trip, *, chat_id: int, message_id: int
+) -> Trip:
+    """Куди продубльовано рейс. Без цього його не прибрати з чату потім."""
+    trip.chat_id = chat_id
+    trip.chat_message_id = message_id
+    await session.commit()
+    await session.refresh(trip)
+    return trip
 
 
 async def soft_delete_trip(session: AsyncSession, trip: Trip, *, deleted_by: int) -> Trip:

@@ -53,3 +53,19 @@ MAX_TRIP_STATUS = 64
 #: на них же, щоб у колонці не опинилось двох різних написань.
 DATE_FORMAT = "%Y-%m-%d"
 DATETIME_FORMAT = "%Y-%m-%d %H:%M"
+
+
+def parse_chat_id(raw: str) -> int | None:
+    """Id чату з тексту, або None, якщо це не схоже на id.
+
+    Живе тут, бо чат вводиться у двох місцях: при заведенні компанії та при
+    редагуванні її картки, — і правило має бути одне.
+
+    int() з try/except не годиться: він прийме «+5», «  7  » і «1_0».
+    """
+    value = raw.strip()
+    negative = value.startswith("-")
+    digits = value[1:] if negative else value
+    if not digits.isdigit() or not 1 <= len(digits) <= 20:
+        return None
+    return -int(digits) if negative else int(digits)
