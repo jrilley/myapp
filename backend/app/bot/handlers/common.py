@@ -19,6 +19,7 @@ from app.bot.actions import (
     render_own_applications,
     render_positions,
     render_stats,
+    render_trips,
 )
 from app.bot.keyboards import (
     DELETE_PREFIX,
@@ -48,8 +49,11 @@ HELP_GUEST = (
 )
 
 HELP_REGISTERED = (
-    "Я приймаю заявки.\n\n"
+    "Я веду рейси та приймаю заявки.\n\n"
     "Користуйтесь кнопками нижче — вводити команди не потрібно.\n\n"
+    "«Новий рейс» проведе по кроках: ТТН, дата прибуття, компанія-експортер, "
+    "транспорт, культура й водій. Компанію-замовника та ваші контакти "
+    "як логіста я підставлю сам — питати їх не буду.\n\n"
     "Якщо зручніше текстом, працюють і команди:\n"
     "/new — нова заявка\n"
     "/my — мої заявки\n"
@@ -212,6 +216,10 @@ async def on_page(
         if await _reject_non_admin(callback, access):
             return
         rendered = await render_all_applications(session, offset=offset)
+    elif kind == "trips":
+        # Обсяг видимого визначає render_trips за роллю — у callback_data
+        # немає нічого, чим його можна було б розширити.
+        rendered = await render_trips(session, access, offset=offset)
     elif kind in ("pos", "comp"):
         if not access.is_main_admin:
             await callback.answer(MAIN_ADMIN_ONLY, show_alert=True)

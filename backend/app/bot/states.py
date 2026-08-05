@@ -69,3 +69,39 @@ class VehicleEdit(StatesGroup):
     brand = State()
     model = State()
     license_plate = State()
+
+
+class TripForm(StatesGroup):
+    """Створення рейсу.
+
+    Компанія-замовник і дані логіста не мають власних кроків: вони
+    підтягуються з employees того, хто заповнює форму.
+    """
+
+    ttn = State()
+    arrival_date = State()
+    exporter = State()
+    truck = State()
+    truck_plate = State()
+    trailer = State()
+    trailer_type = State()
+    trailer_plate = State()
+    grain = State()
+    driver = State()
+    driver_phone = State()
+    confirm = State()
+
+
+class TripEdit(StatesGroup):
+    """Редагування рейсу з картки.
+
+    Стан один на всі текстові поля: що саме редагуємо — лежить у даних FSM,
+    інакше знадобився б окремий стан і окремий хендлер на кожне з півтора
+    десятка полів.
+    """
+
+    value = State()
+    #: Дата й компанія-експортер обираються кнопками, тому мають свої стани:
+    #: за станом визначається, який саме крок чекає на натискання.
+    arrival_date = State()
+    exporter = State()

@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "72e5921670ed",
+  "alembic_head": "e551df298167",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -907,6 +907,578 @@
         }
       ],
       "indexes": []
+    },
+    "trips": {
+      "description": "Рейс — заявка на перевезення за однією ТТН.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "ttn_num",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Номер ТТН. Вводить логіст."
+        },
+        {
+          "name": "arrival_date",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Дата прибуття автомобіля, «РРРР-ММ-ДД». Обирається в календарі."
+        },
+        {
+          "name": "client_company_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "company.id",
+          "description": "Компанія-замовник. Береться з компанії того, хто створює рейс."
+        },
+        {
+          "name": "exporter_company_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "company.id",
+          "description": "Компанія-експортер. Обирається зі списку компаній."
+        },
+        {
+          "name": "created_by",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "employees.id",
+          "description": "Хто створив рейс. У самій заявці не показується."
+        },
+        {
+          "name": "logist_fullname",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "ПІБ логіста на момент створення (копія employees.fullname)."
+        },
+        {
+          "name": "logist_phone_number",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Телефон логіста на момент створення (копія employees.phone_number)."
+        },
+        {
+          "name": "logist_tg",
+          "type": {
+            "generic": "BIGINT",
+            "sqlite": "BIGINT",
+            "postgresql": "BIGINT"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Telegram id логіста (копія employees.tg_id) — щоб із заявки можна було написати."
+        },
+        {
+          "name": "truck",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Тягач: марка й модель, вводить логіст."
+        },
+        {
+          "name": "truck_license_plate",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Державний номер тягача."
+        },
+        {
+          "name": "trailer",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Причіп: марка й модель, вводить логіст."
+        },
+        {
+          "name": "trailer_type",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Тип причепа (зерновоз, самоскид тощо)."
+        },
+        {
+          "name": "trailer_license_plate",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Державний номер причепа. Не може збігатися з номером тягача."
+        },
+        {
+          "name": "grain_type",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Культура, яку везуть."
+        },
+        {
+          "name": "driver_fullname",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "ПІБ водія."
+        },
+        {
+          "name": "driver_phone_number",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Телефон водія."
+        },
+        {
+          "name": "datetime_entry",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Час заїзду на територію, «РРРР-ММ-ДД ГГ:ХХ». При створенні порожній."
+        },
+        {
+          "name": "datetime_departure",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Час виїзду, «РРРР-ММ-ДД ГГ:ХХ». При створенні порожній."
+        },
+        {
+          "name": "b_mass",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": 0,
+          "server_default": "0",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Брутто, кг. При створенні 0."
+        },
+        {
+          "name": "t_mass",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": 0,
+          "server_default": "0",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Тара, кг. При створенні 0."
+        },
+        {
+          "name": "n_mass",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": 0,
+          "server_default": "0",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Нетто, кг. При створенні 0."
+        },
+        {
+          "name": "edited_by",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "employees.id",
+          "description": "Хто востаннє редагував. NULL — рейс не редагували."
+        },
+        {
+          "name": "updated_at",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Коли востаннє редагували, ISO-8601 UTC. NULL — не редагували."
+        },
+        {
+          "name": "deleted_by",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "employees.id",
+          "description": "Хто видалив рейс."
+        },
+        {
+          "name": "deleted_at",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Мітка м'якого видалення, ISO-8601 UTC; NULL = рейс живий. Рядок не стирається: це історія перевезень."
+        },
+        {
+          "name": "status",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": "Створено",
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Статус рейсу."
+        }
+      ],
+      "unique_constraints": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "client_company_id"
+          ],
+          "references": [
+            "company.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
+            "created_by"
+          ],
+          "references": [
+            "employees.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
+            "deleted_by"
+          ],
+          "references": [
+            "employees.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
+            "edited_by"
+          ],
+          "references": [
+            "employees.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
+            "exporter_company_id"
+          ],
+          "references": [
+            "company.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ix_trips_client",
+          "columns": [
+            "client_company_id",
+            "deleted_at"
+          ],
+          "unique": false
+        },
+        {
+          "name": "ix_trips_ttn_num",
+          "columns": [
+            "ttn_num"
+          ],
+          "unique": false
+        },
+        {
+          "name": "ix_trips_visible",
+          "columns": [
+            "deleted_at",
+            "arrival_date"
+          ],
+          "unique": false
+        }
+      ]
     }
   },
   "managed_by_alembic": {

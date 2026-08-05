@@ -18,8 +18,18 @@ from app.models import (
     Position,
     Role,
     Trailer,
+    Trip,
     Truck,
 )
+
+
+def _utc_now() -> str:
+    """Мітка часу для аудиту рейсів: ISO-8601 UTC, посекундно.
+
+    UTC, а не місцевий час: рядки в updated_at/deleted_at порівнюються між
+    собою, і зсув через перехід на літній час зробив би це порівняння хибним.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 async def create_application(
@@ -414,6 +424,98 @@ async def list_company_employees(
         .offset(offset)
     )
     return list(await session.scalars(stmt)), int(total or 0)
+
+
+# ---------------------------------------------------------------------------
+# Рейси
+# ---------------------------------------------------------------------------
+
+
+def _trip_with_links():
+    return (
+        selectinload(Trip.client_company),
+        selectinload(Trip.exporter_company),
+        selectinload(Trip.creator),
+    )
+
+
+async def create_trip(session: AsyncSession, **fields) -> Trip:
+    """Створює рейс. Поля перевіряє хендлер — тут лише запис."""
+    trip = Trip(**fields)
+    session.add(trip)
+    await session.commit()
+    return await get_trip(session, trip.id)
+
+
+async def get_trip(
+    session: AsyncSession, trip_id: int, *, include_deleted: bool = False
+) -> Trip | None:
+    stmt = select(Trip).where(Trip.id == trip_id).options(*_trip_with_links())
+    if not include_deleted:
+        stmt = stmt.where(Trip.deleted_at.is_(None))
+    return await session.scalar(stmt)
+
+
+async def list_trips(
+    session: AsyncSession,
+    *,
+    company_id: int | None = None,
+    created_by: int | None = None,
+    limit: int = 5,
+    offset: int = 0,
+) -> tuple[list[Trip], int]:
+    """Сторінка рейсів і загальна кількість під ті самі фільтри.
+
+    Фільтри звужують видимість, тож ніколи не приходять із callback_data
+    напряму — їх обчислює `actions.render_trips` за роллю викликача.
+    """
+    filters = [Trip.deleted_at.is_(None)]
+    if company_id is not None:
+        filters.append(Trip.client_company_id == company_id)
+    if created_by is not None:
+        filters.append(Trip.created_by == created_by)
+
+    total = await session.scalar(select(func.count()).select_from(Trip).where(*filters))
+    stmt = (
+        select(Trip)
+        .where(*filters)
+        .options(*_trip_with_links())
+        .order_by(Trip.arrival_date.desc(), Trip.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(await session.scalars(stmt)), int(total or 0)
+
+
+async def update_trip(
+    session: AsyncSession, trip: Trip, *, editor_id: int, **fields
+) -> Trip:
+    """Оновлює поля рейсу й одразу проставляє, хто і коли це зробив.
+
+    Аудит пишеться тут, а не в хендлерах: інакше достатньо було б додати
+    один новий редактор і забути про edited_by, а слід уже не відновити.
+    """
+    for name, value in fields.items():
+        setattr(trip, name, value)
+    trip.edited_by = editor_id
+    trip.updated_at = _utc_now()
+    await session.commit()
+
+    # id читаємо ДО expire: після нього звернення до атрибута тягне синхронне
+    # довантаження, а в async-сесії це MissingGreenlet.
+    trip_id = trip.id
+    # expire_on_commit=False лишає в identity map старі зв'язки, тож зміна
+    # exporter_company_id сама по собі не перечитала б exporter_company.
+    session.expire(trip)
+    return await get_trip(session, trip_id)
+
+
+async def soft_delete_trip(session: AsyncSession, trip: Trip, *, deleted_by: int) -> Trip:
+    trip.deleted_by = deleted_by
+    trip.deleted_at = _utc_now()
+    await session.commit()
+    await session.refresh(trip)
+    return trip
 
 
 async def list_roles(session: AsyncSession) -> list[Role]:

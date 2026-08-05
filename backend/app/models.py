@@ -284,3 +284,142 @@ class Trailer(VehicleMixin, Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Trailer id={self.id} plate={self.license_plate!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Рейси
+# ---------------------------------------------------------------------------
+
+#: Статус новоствореного рейсу. Колонка текстова, а не Enum, навмисно:
+#: додати статус має бути зміною константи, а не міграцією схеми.
+TRIP_STATUS_NEW = "Створено"
+
+
+class Trip(Base):
+    """Рейс — заявка на перевезення за однією ТТН.
+
+    Дані логіста продубльовані копією (`logist_fullname`, `logist_phone_number`,
+    `logist_tg`), хоча поруч є FK `created_by`. Це навмисно: рейс — документ, і
+    він має лишитись читабельним, якщо співробітник змінить прізвище чи піде з
+    компанії. FK відповідає на «хто це зараз», копія — на «хто це був тоді».
+
+    Дати й час зберігаються текстом, як у вихідній схемі. Формати фіксовані,
+    щоб сортування рядком збігалося з хронологією:
+      arrival_date                — «РРРР-ММ-ДД»
+      datetime_entry/_departure   — «РРРР-ММ-ДД ГГ:ХХ», місцевий час
+      updated_at/deleted_at       — ISO-8601 UTC, проставляє репозиторій
+    """
+
+    __tablename__ = "trips"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    ttn_num: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, doc="Номер ТТН. Вводить логіст."
+    )
+    arrival_date: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Дата прибуття автомобіля, «РРРР-ММ-ДД». Обирається в календарі."
+    )
+
+    # У вихідній схемі ці два поля TEXT, але в них лежить company.id. Тримаємо
+    # їх INTEGER із справжнім FK: інакше зв'язок неможливо ні перевірити, ні
+    # зджойнити, а назва компанії дублювалась би в кожному рейсі.
+    client_company_id: Mapped[int] = mapped_column(
+        ForeignKey("company.id"),
+        nullable=False,
+        doc="Компанія-замовник. Береться з компанії того, хто створює рейс.",
+    )
+    exporter_company_id: Mapped[int] = mapped_column(
+        ForeignKey("company.id"),
+        nullable=False,
+        doc="Компанія-експортер. Обирається зі списку компаній.",
+    )
+
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("employees.id"),
+        nullable=False,
+        doc="Хто створив рейс. У самій заявці не показується.",
+    )
+    logist_fullname: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="ПІБ логіста на момент створення (копія employees.fullname)."
+    )
+    logist_phone_number: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Телефон логіста на момент створення (копія employees.phone_number)."
+    )
+    logist_tg: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        doc="Telegram id логіста (копія employees.tg_id) — щоб із заявки можна було написати.",
+    )
+
+    truck: Mapped[str] = mapped_column(Text, nullable=False, doc="Тягач: марка й модель, вводить логіст.")
+    truck_license_plate: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Державний номер тягача."
+    )
+    trailer: Mapped[str] = mapped_column(Text, nullable=False, doc="Причіп: марка й модель, вводить логіст.")
+    trailer_type: Mapped[str] = mapped_column(Text, nullable=False, doc="Тип причепа (зерновоз, самоскид тощо).")
+    trailer_license_plate: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Державний номер причепа. Не може збігатися з номером тягача."
+    )
+
+    grain_type: Mapped[str] = mapped_column(Text, nullable=False, doc="Культура, яку везуть.")
+    driver_fullname: Mapped[str] = mapped_column(Text, nullable=False, doc="ПІБ водія.")
+    driver_phone_number: Mapped[str] = mapped_column(Text, nullable=False, doc="Телефон водія.")
+
+    datetime_entry: Mapped[str | None] = mapped_column(
+        Text, doc="Час заїзду на територію, «РРРР-ММ-ДД ГГ:ХХ». При створенні порожній."
+    )
+    datetime_departure: Mapped[str | None] = mapped_column(
+        Text, doc="Час виїзду, «РРРР-ММ-ДД ГГ:ХХ». При створенні порожній."
+    )
+
+    # server_default, а не лише default: у вихідній схемі стоїть DEFAULT 0,
+    # і вставка в обхід ORM (міграція, ручний SQL) має поводитись так само.
+    b_mass: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", doc="Брутто, кг. При створенні 0."
+    )
+    t_mass: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", doc="Тара, кг. При створенні 0."
+    )
+    n_mass: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", doc="Нетто, кг. При створенні 0."
+    )
+
+    # У вихідній схемі edited_by був NOT NULL, але той самий опис каже, що при
+    # створенні поле порожнє — виконати обидві вимоги неможливо. Лишаємо
+    # nullable: NULL тут означає «рейс ще ніхто не редагував».
+    edited_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), doc="Хто востаннє редагував. NULL — рейс не редагували."
+    )
+    updated_at: Mapped[str | None] = mapped_column(
+        Text, doc="Коли востаннє редагували, ISO-8601 UTC. NULL — не редагували."
+    )
+    deleted_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"), doc="Хто видалив рейс."
+    )
+    deleted_at: Mapped[str | None] = mapped_column(
+        Text,
+        doc=(
+            "Мітка м'якого видалення, ISO-8601 UTC; NULL = рейс живий. "
+            "Рядок не стирається: це історія перевезень."
+        ),
+    )
+
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, default=TRIP_STATUS_NEW, doc="Статус рейсу."
+    )
+
+    # foreign_keys обов'язковий: на company і на employees звідси веде
+    # більш ніж один FK, і SQLAlchemy сама не вгадає, який із них чий.
+    client_company: Mapped["Company"] = relationship(foreign_keys=[client_company_id])
+    exporter_company: Mapped["Company"] = relationship(foreign_keys=[exporter_company_id])
+    creator: Mapped["Employee"] = relationship(foreign_keys=[created_by])
+
+    __table_args__ = (
+        # Під основний запит списку: живі рейси, найближчі за датою прибуття.
+        Index("ix_trips_visible", "deleted_at", "arrival_date"),
+        Index("ix_trips_client", "client_company_id", "deleted_at"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Trip id={self.id} ttn={self.ttn_num!r} date={self.arrival_date}>"

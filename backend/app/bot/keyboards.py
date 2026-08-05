@@ -1,3 +1,4 @@
+import calendar
 from collections.abc import Sequence
 
 from aiogram.types import (
@@ -34,6 +35,20 @@ MENU_VEHICLE_ADD = "menu:vehicle"
 #: Для адміністратора компанії — власна компанія мається на увазі.
 MENU_MY_VEHICLES = "menu:myveh"
 MENU_MY_EMPLOYEES = "menu:myemp"
+
+MENU_TRIP_NEW = "menu:tripnew"
+MENU_TRIPS = "menu:trips"
+
+# Префікси рейсу. Усі починаються з «trip:», тому кожен розбір спирається на
+# двокрапку в кінці — «trip:cal:» і «trip:card» інакше перетнулися б.
+TRIP_CAL_PREFIX = "trip:cal"
+TRIP_DATE_PREFIX = "trip:date"
+TRIP_EXPORTER_PREFIX = "trip:exp"
+TRIP_CONFIRM = "trip:confirm"
+TRIP_SHOW_PREFIX = "trip:show"
+TRIP_EDIT_PREFIX = "trip:edit"
+TRIP_FIELD_PREFIX = "trip:field"
+TRIP_DELETE_PREFIX = "trip:drop"
 
 COMPANY_CARD_PREFIX = "comp"
 COMPANY_VEHICLES_PREFIX = "compveh"
@@ -88,6 +103,7 @@ NOOP = "noop"
 PAGE_APPLICATIONS = 5
 PAGE_EMPLOYEES = 8
 PAGE_REFERENCE = 10
+PAGE_TRIPS = 6
 
 
 def _add_pagination(
@@ -178,6 +194,8 @@ def main_menu_keyboard(
         builder.adjust(1)
         return builder.as_markup()
 
+    builder.button(text="🚛 Новий рейс", callback_data=MENU_TRIP_NEW)
+    builder.button(text="🧾 Рейси", callback_data=MENU_TRIPS)
     builder.button(text="📝 Нова заявка", callback_data=MENU_NEW)
     builder.button(text="📋 Мої заявки", callback_data=MENU_MY)
     if is_admin:
@@ -461,4 +479,135 @@ def applications_keyboard(
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
+    return builder.as_markup()
+
+
+# ---------------------------------------------------------------------------
+# Рейси
+# ---------------------------------------------------------------------------
+
+MONTHS = (
+    "Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень",
+    "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень",
+)
+WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд")
+
+
+def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    """Сусідній місяць. Рахуємо в «місяцях від нуля», щоб грудень→січень
+    переносив рік сам, без окремої гілки."""
+    index = year * 12 + (month - 1) + delta
+    return index // 12, index % 12 + 1
+
+
+def calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
+    """Календар на місяць: дату обирають натисканням, а не набирають.
+
+    Порожні клітинки — теж кнопки: Telegram не дозволяє пропуски в рядку,
+    тому вони NOOP із крапкою замість числа.
+    """
+    builder = InlineKeyboardBuilder()
+
+    prev_year, prev_month = shift_month(year, month, -1)
+    next_year, next_month = shift_month(year, month, 1)
+    builder.row(
+        InlineKeyboardButton(
+            text="‹", callback_data=f"{TRIP_CAL_PREFIX}:{prev_year}:{prev_month}"
+        ),
+        InlineKeyboardButton(text=f"{MONTHS[month - 1]} {year}", callback_data=NOOP),
+        InlineKeyboardButton(
+            text="›", callback_data=f"{TRIP_CAL_PREFIX}:{next_year}:{next_month}"
+        ),
+    )
+    builder.row(*(InlineKeyboardButton(text=d, callback_data=NOOP) for d in WEEKDAYS))
+
+    # monthdayscalendar тижнями по 7, нулі — дні сусідніх місяців.
+    for week in calendar.Calendar().monthdayscalendar(year, month):
+        builder.row(
+            *(
+                InlineKeyboardButton(text="·", callback_data=NOOP)
+                if day == 0
+                else InlineKeyboardButton(
+                    text=str(day),
+                    callback_data=f"{TRIP_DATE_PREFIX}:{year:04d}-{month:02d}-{day:02d}",
+                )
+                for day in week
+            )
+        )
+
+    builder.row(
+        InlineKeyboardButton(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    )
+    return builder.as_markup()
+
+
+def trip_exporter_keyboard(companies) -> InlineKeyboardMarkup:
+    """Компанія-експортер: підпис — «назва - код», як і при виборі компанії
+    для транспорту."""
+    builder = InlineKeyboardBuilder()
+    for company in companies:
+        builder.button(
+            text=f"{company.name} - {company.tax_id}",
+            callback_data=f"{TRIP_EXPORTER_PREFIX}:{company.id}",
+        )
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def trip_confirm_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Створити рейс", callback_data=TRIP_CONFIRM)
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def trips_keyboard(trips, *, offset: int = 0, total: int | None = None) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for trip in trips:
+        builder.button(
+            text=f"ТТН {trip.ttn_num} · {trip.arrival_date}",
+            callback_data=f"{TRIP_SHOW_PREFIX}:{trip.id}",
+        )
+    builder.adjust(1)
+    if total is not None:
+        _add_pagination(builder, "trips", offset=offset, limit=PAGE_TRIPS, total=total)
+    builder.row(
+        InlineKeyboardButton(text="🚛 Новий рейс", callback_data=MENU_TRIP_NEW)
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
+    return builder.as_markup()
+
+
+def trip_card_keyboard(trip_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Редагувати", callback_data=f"{TRIP_EDIT_PREFIX}:{trip_id}")
+    builder.button(text="🗑 Видалити", callback_data=f"{TRIP_DELETE_PREFIX}:{trip_id}")
+    builder.button(text="⬅️ До рейсів", callback_data=MENU_TRIPS)
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+
+def trip_fields_keyboard(trip_id: int, fields) -> InlineKeyboardMarkup:
+    """Меню полів рейсу. Список приходить ззовні: які поля існують і як
+    називаються, знає хендлер, який їх і зберігає."""
+    builder = InlineKeyboardBuilder()
+    for key, title in fields:
+        builder.button(text=title, callback_data=f"{TRIP_FIELD_PREFIX}:{key}:{trip_id}")
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(
+            text="⬅️ До рейсу", callback_data=f"{TRIP_SHOW_PREFIX}:{trip_id}"
+        )
+    )
+    return builder.as_markup()
+
+
+def after_trip_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🧾 Рейси", callback_data=MENU_TRIPS)
+    builder.button(text="🚛 Ще один рейс", callback_data=MENU_TRIP_NEW)
+    builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
+    builder.adjust(1)
     return builder.as_markup()

@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
 from app.bot.access import Access
-from app.bot.formatting import format_admin_application, format_own_application
+from app.bot.formatting import (
+    format_admin_application,
+    format_own_application,
+    format_trip_row,
+)
 from app.bot.keyboards import (
     COMPANY_CARD_PREFIX,
     COMPANY_VEHICLES_PREFIX,
@@ -20,12 +24,14 @@ from app.bot.keyboards import (
     PAGE_APPLICATIONS,
     PAGE_EMPLOYEES,
     PAGE_REFERENCE,
+    PAGE_TRIPS,
     VEHICLE_TITLES,
     applications_keyboard,
     back_to_menu_keyboard,
     companies_list_keyboard,
     employees_keyboard,
     positions_keyboard,
+    trips_keyboard,
     vehicle_list_keyboard,
 )
 from app.bot.publisher import Publisher
@@ -191,6 +197,52 @@ async def render_companies(session: AsyncSession, *, offset: int = 0) -> Rendere
     return f"{header}\nОберіть компанію:", companies_list_keyboard(
         companies, offset=offset, total=total
     )
+
+
+NOT_REGISTERED = "Спершу зареєструйтесь — рейс веде співробітник компанії."
+
+
+async def render_trips(
+    session: AsyncSession, access: Access, *, offset: int = 0
+) -> Rendered:
+    """Список рейсів у межах, доступних викликачу.
+
+    Обсяг видимого визначає роль, а не callback_data: головний адмін бачить
+    усі рейси, адміністратор компанії — рейси своєї компанії, решта — власні.
+    Фільтр обчислюється тут, бо `repository.list_trips` трактує None як
+    «без обмеження» — передати туди невизначений id означало б показати все.
+    """
+    if access.is_main_admin:
+        trips, total = await repository.list_trips(
+            session, limit=PAGE_TRIPS, offset=offset
+        )
+        title = "Усі рейси"
+    elif access.employee is None:
+        return NOT_REGISTERED, back_to_menu_keyboard()
+    elif access.is_admin:
+        if access.employee.company_id is None:
+            return "Не вдалося визначити вашу компанію.", back_to_menu_keyboard()
+        trips, total = await repository.list_trips(
+            session,
+            company_id=access.employee.company_id,
+            limit=PAGE_TRIPS,
+            offset=offset,
+        )
+        title = "Рейси компанії"
+    else:
+        if access.employee.id is None:
+            return NOT_REGISTERED, back_to_menu_keyboard()
+        trips, total = await repository.list_trips(
+            session, created_by=access.employee.id, limit=PAGE_TRIPS, offset=offset
+        )
+        title = "Мої рейси"
+
+    if not trips:
+        return "Рейсів поки немає.", trips_keyboard([])
+
+    header = f"<b>{title}</b> — {_range_note(offset, len(trips), total)}"
+    body = "\n\n".join(format_trip_row(trip) for trip in trips)
+    return f"{header}\n\n{body}", trips_keyboard(trips, offset=offset, total=total)
 
 
 async def render_stats(session: AsyncSession) -> Rendered:

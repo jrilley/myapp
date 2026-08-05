@@ -59,6 +59,11 @@ class FakeMessage:
         self.markups.append(reply_markup)
         return self
 
+    async def edit_reply_markup(self, reply_markup=None, **_kwargs) -> "FakeMessage":
+        """Гортання календаря міняє лише клавіатуру, текст лишається."""
+        self.markups.append(reply_markup)
+        return self
+
 
 class FakeCallback:
     def __init__(self, data: str, user: FakeUser | None = None):
