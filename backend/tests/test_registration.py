@@ -11,7 +11,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
-from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER
+from app.bot.access import ROLE_COMPANY_ADMIN, ROLE_MAIN_ADMIN, ROLE_USER
 from app.bot.handlers.registration import (
     company_address,
     company_name,
@@ -63,7 +63,7 @@ def state() -> FSMContext:
 async def reference_data(session):
     """Довідники, без яких реєстрація неможлива."""
     company = Company(name="ТОВ Ромашка", tax_id="12345678", address="Київ")
-    position = Position(id=1, position="Інше")
+    position = Position(id=1, position="Інше", role_id=3)
     session.add_all(
         [
             company,
@@ -87,9 +87,11 @@ async def _walk_through(state, session, company, position, *, second_phone=None)
     await step_company(
         FakeCallback(f"{REG_COMPANY_PREFIX}:{company.id}"), state, session
     )
-    await step_position(
-        FakeCallback(f"{REG_POSITION_PREFIX}:{position.id}"), state, session
-    )
+    # Повертаємо останній callback: у його повідомленні лежить зведення,
+    # яке деякі тести перевіряють.
+    callback = FakeCallback(f"{REG_POSITION_PREFIX}:{position.id}")
+    await step_position(callback, state, session)
+    return callback
 
 
 # ---------------------------------------------------------------------------
@@ -113,9 +115,42 @@ async def test_registration_creates_an_employee(
     assert employee.phone_number == "+380671112233"
     assert employee.company_id == company.id
     assert employee.position_id == position.id
-    # Новий співробітник завжди отримує базову роль.
+    # Роль дає посада: «Інше» — заглушка, вона не дає нічого понад базове.
     assert employee.role.role == ROLE_USER
     assert await state.get_state() is None
+
+
+async def test_role_comes_from_the_chosen_position(
+    session, state, access_guest, reference_data
+):
+    """Директор — адмінська посада, тож реєстрація одразу дає адмінські права,
+    без окремого підвищення руками."""
+    company, _ = reference_data
+    session.add(Role(id=2, role=ROLE_COMPANY_ADMIN))
+    await session.commit()
+    director = await repository.create_position(session, name="Директор", role_id=2)
+
+    await on_register(FakeCallback("reg:start"), state, session, access_guest)
+    await _walk_through(state, session, company, director)
+    await step_confirm(
+        FakeCallback("reg:confirm", user=FakeUser(STRANGER_ID)),
+        state, session, access_guest,
+    )
+
+    employee = await repository.get_employee_by_tg_id(session, STRANGER_ID)
+    assert employee.role.role == ROLE_COMPANY_ADMIN
+
+
+async def test_confirmation_shows_the_role_the_position_grants(
+    session, state, access_guest, reference_data
+):
+    company, position = reference_data
+    await on_register(FakeCallback("reg:start"), state, session, access_guest)
+
+    callback = await _walk_through(state, session, company, position)
+
+    # Людина має бачити, які права дасть обрана посада, ще до підтвердження.
+    assert f"<b>Роль доступу:</b> {ROLE_USER}" in callback.message.answers[0]
 
 
 async def test_menu_after_registration_is_the_user_menu(

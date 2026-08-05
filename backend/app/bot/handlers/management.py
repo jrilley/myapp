@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.access import ADMIN_ONLY, Access, resolve_company_id
+from app.bot.access import ADMIN_ONLY, ROLE_MAIN_ADMIN, Access, resolve_company_id
 from app.bot.actions import render_company_employees, render_positions
 from app.bot.constants import MAX_FULLNAME, MAX_PHONE, MAX_POSITION, MIN_PHONE
 from app.bot.keyboards import (
@@ -24,10 +24,16 @@ from app.bot.keyboards import (
     MENU_MY_EMPLOYEES,
     MENU_POSITIONS,
     POSITION_ADD,
+    POSITION_APPLY_ROLE_PREFIX,
+    POSITION_CARD_PREFIX,
+    POSITION_NEW_ROLE_PREFIX,
+    POSITION_SET_ROLE_PREFIX,
     cancel_keyboard,
     company_card_keyboard,
     employee_card_keyboard,
     employee_choice_keyboard,
+    position_card_keyboard,
+    position_roles_keyboard,
 )
 from app.bot.states import EmployeeEdit, PositionForm
 from app.models import Employee
@@ -85,13 +91,20 @@ async def _employee_or_denied(
 
 def _card(employee: Employee) -> str:
     extra = employee.phone_number2
+    # Роль зазвичай дає посада. Якщо вона відрізняється — це ручне
+    # перевизначення, і показати це важливо: інакше незрозуміло, чому в
+    # людини права, яких її посада не дає.
+    granted = employee.position.role_id
+    override = (
+        " <i>(призначено вручну)</i>" if granted != employee.role_id else ""
+    )
     return (
         f"<b>{escape(employee.fullname)}</b>\n\n"
         f"<b>Телефон:</b> {escape(employee.phone_number)}\n"
         + (f"<b>Додатковий:</b> {escape(extra)}\n" if extra else "")
         + f"<b>Компанія:</b> {escape(employee.company.name)}\n"
         f"<b>Посада:</b> {escape(employee.position.position)}\n"
-        f"<b>Роль:</b> {escape(employee.role.role)}\n"
+        f"<b>Роль:</b> {escape(employee.role.role)}{override}\n"
         f"<b>Telegram id:</b> <code>{employee.tg_id}</code>"
     )
 
@@ -241,7 +254,12 @@ async def on_employee_edit(
     if field == "company":
         items = [(c.id, c.name) for c in await repository.list_companies(session)]
     elif field == "position":
-        items = [(p.id, p.position) for p in await repository.list_positions(session)]
+        # Показуємо, яку роль дасть кожна посада: зміна посади змінює й роль,
+        # і це має бути видно до натискання, а не після.
+        items = [
+            (p.id, f"{p.position} — {p.role.role}")
+            for p in await repository.list_positions(session)
+        ]
     elif field == "role":
         # Заборона на власну роль: інакше головний адмін одним натисканням
         # знімає з себе доступ і повернути його вже нічим.
@@ -296,7 +314,20 @@ async def on_employee_set(
         return
 
     column, _ = CHOICE_FIELDS[field]
-    await repository.update_employee(session, employee, **{column: int(raw_value)})
+    updates = {column: int(raw_value)}
+
+    if field == "position":
+        # Роль іде за посадою — саме в цьому сенс довідника. Виняток один:
+        # «Головного адміністратора» не дає жодна посада, тож і зняти його
+        # зміною посади не можна — цю роль видала людина, людина й забирає.
+        position = await repository.get_position(session, int(raw_value))
+        if position is None:
+            await callback.answer("Невідома посада", show_alert=True)
+            return
+        if employee.role.role != ROLE_MAIN_ADMIN:
+            updates["role_id"] = position.role_id
+
+    await repository.update_employee(session, employee, **updates)
     await callback.answer("Збережено")
     if callback.message is not None:
         await _show_card(callback.message, session, employee.id, access=access)
@@ -393,6 +424,20 @@ async def on_positions(
     await callback.message.answer(text, reply_markup=keyboard)
 
 
+async def _assignable_roles(session: AsyncSession) -> list[tuple[int, str]]:
+    """Ролі, які може давати посада.
+
+    «Головний адміністратор» у список не входить: інакше будь-яку людину
+    можна було б зробити власником системи, просто призначивши їй посаду.
+    Цю роль видає головний адмін вручну з картки співробітника.
+    """
+    return [
+        (role.id, role.role)
+        for role in await repository.list_roles(session)
+        if role.role != ROLE_MAIN_ADMIN
+    ]
+
+
 @router.callback_query(F.data == POSITION_ADD)
 async def on_position_add(
     callback: CallbackQuery, state: FSMContext, access: Access
@@ -424,13 +469,154 @@ async def position_name(
         )
         return
 
-    await state.clear()
-    position = await repository.create_position(session, name=value)
-    text, keyboard = await render_positions(session)
+    await state.update_data(position_name=value)
+    await state.set_state(PositionForm.role)
     await message.answer(
-        f"✅ Посаду «{escape(position.position)}» додано.\n\n{text}",
+        f"Посада «{escape(value)}».\nЯку роль доступу вона дає?",
+        reply_markup=position_roles_keyboard(
+            POSITION_NEW_ROLE_PREFIX, await _assignable_roles(session),
+            back=MENU_POSITIONS,
+        ),
+    )
+
+
+@router.callback_query(
+    PositionForm.role, F.data.startswith(f"{POSITION_NEW_ROLE_PREFIX}:")
+)
+async def position_role(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    if await _deny(callback, access):
+        return
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    role = await _role_or_none(session, raw_id)
+    if role is None:
+        await callback.answer("Невідома роль", show_alert=True)
+        return
+
+    data = await state.get_data()
+    await state.clear()
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    # Назву могли зайняти, поки анкета була відкрита.
+    if await repository.get_position_by_name(session, data["position_name"]):
+        text, keyboard = await render_positions(session)
+        await callback.message.answer(
+            f"Посада «{escape(data['position_name'])}» уже є.\n\n{text}",
+            reply_markup=keyboard,
+        )
+        return
+
+    position = await repository.create_position(
+        session, name=data["position_name"], role_id=role.id
+    )
+    text, keyboard = await render_positions(session)
+    await callback.message.answer(
+        f"✅ Посаду «{escape(position.position)}» додано — вона дає роль "
+        f"«{escape(role.role)}».\n\n{text}",
         reply_markup=keyboard,
     )
+
+
+async def _role_or_none(session: AsyncSession, raw_id: str):
+    if not raw_id.isdigit():
+        return None
+    # Роль беремо зі списку призначуваних, а не за прямим id: інакше
+    # підробленим callback_data можна було б видати «Головного адміністратора».
+    allowed = {role_id for role_id, _ in await _assignable_roles(session)}
+    if int(raw_id) not in allowed:
+        return None
+    return next(
+        (r for r in await repository.list_roles(session) if r.id == int(raw_id)), None
+    )
+
+
+@router.callback_query(F.data.startswith(f"{POSITION_CARD_PREFIX}:"))
+async def on_position_card(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    if await _deny(callback, access):
+        return
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    position = (
+        await repository.get_position(session, int(raw_id)) if raw_id.isdigit() else None
+    )
+    if position is None:
+        await callback.answer("Посаду не знайдено", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        employees = await repository.count_position_employees(session, position.id)
+        await callback.message.answer(
+            f"<b>{escape(position.position)}</b>\n\n"
+            f"<b>Дає роль:</b> {escape(position.role.role)}\n"
+            f"<b>Співробітників на посаді:</b> {employees}",
+            reply_markup=position_card_keyboard(position.id),
+        )
+
+
+@router.callback_query(F.data.startswith(f"{POSITION_SET_ROLE_PREFIX}:"))
+async def on_position_role_choice(
+    callback: CallbackQuery, session: AsyncSession, access: Access
+) -> None:
+    if await _deny(callback, access):
+        return
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    position = (
+        await repository.get_position(session, int(raw_id)) if raw_id.isdigit() else None
+    )
+    if position is None:
+        await callback.answer("Посаду не знайдено", show_alert=True)
+        return
+
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            f"Яку роль має давати посада «{escape(position.position)}»?\n"
+            "<i>Роль зміниться і в тих, хто вже на цій посаді.</i>",
+            reply_markup=position_roles_keyboard(
+                f"{POSITION_APPLY_ROLE_PREFIX}:{position.id}",
+                await _assignable_roles(session),
+                back=f"{POSITION_CARD_PREFIX}:{position.id}",
+            ),
+        )
+
+
+@router.callback_query(F.data.startswith(f"{POSITION_APPLY_ROLE_PREFIX}:"))
+async def on_position_role_set(
+    callback: CallbackQuery, session: AsyncSession, access: Access
+) -> None:
+    if await _deny(callback, access):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[2].isdigit():
+        await callback.answer("Невідома посада", show_alert=True)
+        return
+
+    position = await repository.get_position(session, int(parts[2]))
+    role = await _role_or_none(session, parts[3])
+    if position is None or role is None:
+        await callback.answer("Невідома посада або роль", show_alert=True)
+        return
+
+    position, changed = await repository.set_position_role(session, position, role.id)
+    await callback.answer("Збережено")
+    if callback.message is not None:
+        note = (
+            f"\nРоль оновлено у {changed} співробітник(ів) на цій посаді."
+            if changed
+            else ""
+        )
+        text, keyboard = await render_positions(session)
+        await callback.message.answer(
+            f"✅ Посада «{escape(position.position)}» тепер дає роль "
+            f"«{escape(position.role.role)}».{note}\n\n{text}",
+            reply_markup=keyboard,
+        )
 
 
 @router.message(EmployeeEdit.fullname)

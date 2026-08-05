@@ -86,27 +86,34 @@ async def world(session):
     theirs = Company(name="ТОВ Чужа", tax_id="99999999", address="Львів")
     session.add_all(
         [
-            ours, theirs, Position(id=1, position="Логіст"),
+            ours, theirs,
             Role(id=1, role=ROLE_MAIN_ADMIN),
             Role(id=2, role=ROLE_COMPANY_ADMIN),
             Role(id=3, role=ROLE_USER),
+            # Посада дає роль: диспетчер — звичайний користувач, логіст —
+            # адміністратор компанії.
+            Position(id=1, position="Диспетчер", role_id=3),
+            Position(id=2, position="Логіст", role_id=2),
         ]
     )
     await session.commit()
 
-    async def employee(tg_id, company, name, phone, role_id):
+    async def employee(tg_id, company, name, phone, position_id, role_id):
         return await repository.create_employee(
             session, tg_id=tg_id, company_id=company.id, fullname=name,
-            phone_number=phone, position_id=1, role_id=role_id,
+            phone_number=phone, position_id=position_id, role_id=role_id,
         )
 
     return SimpleNamespace(
         ours=ours,
         theirs=theirs,
-        logist=await employee(OWNER_ID, ours, "Марія Логіст", "+380501112233", 3),
-        boss=await employee(ADMIN_ID, ours, "Олег Адмін", "+380502223344", 2),
-        chief=await employee(CHIEF_ID, ours, "Головний Адмін", "+380509998877", 1),
-        outsider=await employee(STRANGER_ID, theirs, "Чужий Логіст", "+380503334455", 3),
+        logist=await employee(OWNER_ID, ours, "Марія Диспетчер", "+380501112233", 1, 3),
+        boss=await employee(ADMIN_ID, ours, "Олег Логіст", "+380502223344", 2, 2),
+        # Головного адміністратора не дає жодна посада — його призначають вручну.
+        chief=await employee(CHIEF_ID, ours, "Головний Адмін", "+380509998877", 2, 1),
+        outsider=await employee(
+            STRANGER_ID, theirs, "Чужий Диспетчер", "+380503334455", 1, 3
+        ),
     )
 
 
@@ -230,7 +237,7 @@ async def test_client_and_logist_come_from_the_creator(session, state, world, lo
     assert trip.client_company_id == world.ours.id
     assert trip.exporter_company_id == world.theirs.id
     assert trip.created_by == world.logist.id
-    assert trip.logist_fullname == "Марія Логіст"
+    assert trip.logist_fullname == "Марія Диспетчер"
     assert trip.logist_phone_number == "+380501112233"
     assert trip.logist_tg == OWNER_ID
 
@@ -417,7 +424,7 @@ async def test_card_shows_both_companies(session, state, chief, trips):
     text = callback.message.answers[0]
     assert "Alebor IT 000000" in text
     assert "ТОВ Чужа 99999999" in text
-    assert "Марія Логіст" in text
+    assert "Марія Диспетчер" in text
 
 
 # ---------------------------------------------------------------------------

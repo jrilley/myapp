@@ -6,11 +6,12 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import (
+    ROLE_MAIN_ADMIN,
     Application,
     ApplicationStatus,
     Company,
@@ -285,28 +286,92 @@ async def create_company(
 
 
 async def list_positions(session: AsyncSession) -> list[Position]:
-    """Повний список — для клавіатури вибору посади."""
-    return list(await session.scalars(select(Position).order_by(Position.id)))
+    """Повний список — для клавіатури вибору посади.
+
+    Роль тягнемо одразу: посада без ролі майже ніде не потрібна, а ліниве
+    завантаження в async-сесії кидає MissingGreenlet.
+    """
+    return list(
+        await session.scalars(
+            select(Position).options(selectinload(Position.role)).order_by(Position.id)
+        )
+    )
 
 
 async def page_positions(
     session: AsyncSession, *, limit: int = 10, offset: int = 0
 ) -> tuple[list[Position], int]:
     total = await session.scalar(select(func.count()).select_from(Position))
-    stmt = select(Position).order_by(Position.id).limit(limit).offset(offset)
+    stmt = (
+        select(Position)
+        .options(selectinload(Position.role))
+        .order_by(Position.id)
+        .limit(limit)
+        .offset(offset)
+    )
     return list(await session.scalars(stmt)), int(total or 0)
 
 
+async def get_position(session: AsyncSession, position_id: int) -> Position | None:
+    return await session.scalar(
+        select(Position)
+        .where(Position.id == position_id)
+        .options(selectinload(Position.role))
+    )
+
+
 async def get_position_by_name(session: AsyncSession, name: str) -> Position | None:
-    return await session.scalar(select(Position).where(Position.position == name))
+    return await session.scalar(
+        select(Position)
+        .where(Position.position == name)
+        .options(selectinload(Position.role))
+    )
 
 
-async def create_position(session: AsyncSession, *, name: str) -> Position:
-    position = Position(position=name)
+async def create_position(session: AsyncSession, *, name: str, role_id: int) -> Position:
+    position = Position(position=name, role_id=role_id)
     session.add(position)
     await session.commit()
-    await session.refresh(position)
-    return position
+    return await get_position(session, position.id)
+
+
+async def count_position_employees(session: AsyncSession, position_id: int) -> int:
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Employee)
+            .where(Employee.position_id == position_id)
+        )
+        or 0
+    )
+
+
+async def set_position_role(
+    session: AsyncSession, position: Position, role_id: int
+) -> tuple[Position, int]:
+    """Міняє роль посади й підтягує за нею ролі співробітників.
+
+    Повертає (посада, скільки співробітників зачепило). Оновлення масове й
+    навмисне: сенс positions.role_id саме в тому, що роль іде за посадою —
+    інакше після зміни довідника люди лишились би зі старими правами.
+
+    Головних адміністраторів не чіпаємо: цю роль дає не посада, а людина,
+    тож і знімати її має людина. Інакше зміна довідника могла б випадково
+    зняти доступ з єдиного власника системи.
+    """
+    position_id = position.id
+    position.role_id = role_id
+
+    main_admin = await get_role_by_name(session, ROLE_MAIN_ADMIN)
+    stmt = update(Employee).where(
+        Employee.position_id == position_id, Employee.role_id != role_id
+    )
+    if main_admin is not None:
+        stmt = stmt.where(Employee.role_id != main_admin.id)
+    result = await session.execute(stmt.values(role_id=role_id))
+    await session.commit()
+
+    return await get_position(session, position_id), result.rowcount or 0
 
 
 # ---------------------------------------------------------------------------

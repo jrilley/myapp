@@ -60,7 +60,7 @@ async def two_companies(session):
     """Дві компанії з власним транспортом і працівниками."""
     ours = Company(name="Alebor IT", tax_id="000000", address="VST")
     theirs = Company(name="ТОВ Чужа", tax_id="99999999", address="Львів")
-    position = Position(id=1, position="Водій")
+    position = Position(id=1, position="Водій", role_id=3)
     session.add_all(
         [
             ours, theirs, position,

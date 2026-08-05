@@ -1,8 +1,8 @@
 """Реєстрація співробітника та заведення компаній.
 
 Реєстрація обов'язкова: без рядка в employees заявку подати не можна.
-Роль новому користувачу — «Користувач»; підвищує її адміністратор
-(поки що прямо в БД).
+Роль не питається й не задається за замовчуванням — її дає обрана посада
+(`positions.role_id`).
 """
 
 from aiogram import F, Router
@@ -11,7 +11,7 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.access import ROLE_USER, Access
+from app.bot.access import Access
 from app.bot.actions import render_companies
 from app.bot.constants import (
     MAX_ADDRESS,
@@ -230,8 +230,9 @@ async def step_position(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession
 ) -> None:
     raw_id = (callback.data or "").rsplit(":", 1)[-1]
-    positions = {p.id: p for p in await repository.list_positions(session)}
-    position = positions.get(int(raw_id)) if raw_id.isdigit() else None
+    position = (
+        await repository.get_position(session, int(raw_id)) if raw_id.isdigit() else None
+    )
     if position is None:
         await callback.answer("Невідома посада", show_alert=True)
         return
@@ -249,7 +250,8 @@ async def step_position(
             f"<b>Телефон:</b> {data['phone_number']}\n"
             + (f"<b>Додатковий:</b> {extra}\n" if extra else "")
             + f"<b>Компанія:</b> {data['company_name']}\n"
-            f"<b>Посада:</b> {data['position_name']}",
+            f"<b>Посада:</b> {data['position_name']}\n"
+            f"<b>Роль доступу:</b> {position.role.role}",
             reply_markup=registration_confirm_keyboard(),
         )
 
@@ -275,11 +277,13 @@ async def step_confirm(
         )
         return
 
-    role = await repository.get_role_by_name(session, ROLE_USER)
-    if role is None:
+    # Роль дає посада. Перечитуємо посаду замість того, щоб брати роль зі
+    # стану: поки анкета була відкрита, головний адмін міг змінити довідник.
+    position = await repository.get_position(session, data["position_id"])
+    if position is None:
         await callback.message.answer(
-            "Не вдалося завершити реєстрацію: у довіднику ролей немає "
-            f"«{ROLE_USER}». Зверніться до адміністратора."
+            "Обраної посади більше немає в довіднику. Почніть реєстрацію заново.",
+            reply_markup=_menu(access),
         )
         return
 
@@ -290,8 +294,8 @@ async def step_confirm(
         fullname=data["fullname"],
         phone_number=data["phone_number"],
         phone_number2=data.get("phone_number2"),
-        position_id=data["position_id"],
-        role_id=role.id,
+        position_id=position.id,
+        role_id=position.role_id,
     )
 
     # Access у data застарів — його порахували до створення рядка.

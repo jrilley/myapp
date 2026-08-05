@@ -150,8 +150,23 @@ class Company(Base):
         return f"<Company id={self.id} name={self.name!r}>"
 
 
+#: Назви ролей. Живуть тут, а не в шарі бота, бо на них спираються і
+#: міграції-сіди, і репозиторій, і перевірки прав.
+ROLE_MAIN_ADMIN = "Головний адміністратор"
+ROLE_COMPANY_ADMIN = "Адміністратор компанії"
+ROLE_USER = "Користувач"
+
+#: Посади, які дають адміністрування компанії. Список потрібен лише для сіду
+#: нових БД: після нього зв'язок «посада → роль» живе в positions.role_id,
+#: і головний адмін міняє його кнопкою, а не правкою коду.
+ADMIN_POSITIONS = ("Директор", "Менеджер", "Логіст")
+
+#: Посада-заглушка: ставиться, коли справжня невідома. Прав не дає.
+FALLBACK_POSITION = "Інше"
+
+
 class Position(Base):
-    """Довідник посад."""
+    """Довідник посад. Посада визначає роль доступу."""
 
     __tablename__ = "positions"
 
@@ -159,7 +174,16 @@ class Position(Base):
     position: Mapped[str] = mapped_column(
         Text, nullable=False, unique=True, doc="Назва посади, унікальна."
     )
+    role_id: Mapped[int] = mapped_column(
+        ForeignKey("roles.id"),
+        nullable=False,
+        doc=(
+            "Роль доступу, яку дає ця посада. Саме звідси береться "
+            "employees.role_id при реєстрації та при зміні посади."
+        ),
+    )
 
+    role: Mapped["Role"] = relationship(back_populates="positions")
     employees: Mapped[list["Employee"]] = relationship(back_populates="position")
 
     def __repr__(self) -> str:  # pragma: no cover
@@ -177,6 +201,7 @@ class Role(Base):
     )
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="role")
+    positions: Mapped[list["Position"]] = relationship(back_populates="role")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Role id={self.id} role={self.role!r}>"
@@ -212,7 +237,14 @@ class Employee(Base):
         ForeignKey("positions.id"), nullable=False, doc="Посада з довідника positions."
     )
     role_id: Mapped[int] = mapped_column(
-        ForeignKey("roles.id"), nullable=False, doc="Роль доступу з довідника roles."
+        ForeignKey("roles.id"),
+        nullable=False,
+        doc=(
+            "Діюча роль доступу. Проставляється з positions.role_id при "
+            "реєстрації та при зміні посади; головний адмін може перевизначити "
+            "вручну — саме так видається «Головний адміністратор», якого не дає "
+            "жодна посада."
+        ),
     )
 
     company: Mapped["Company"] = relationship(back_populates="employees")

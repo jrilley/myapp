@@ -608,6 +608,7 @@ ORG_TABLES = {
     "positions": [
         ("id", "INTEGER", "PK"),
         ("position", "TEXT NOT NULL", "UQ"),
+        ("role_id", "INTEGER NOT NULL", "FK"),
     ],
     "roles": [
         ("id", "INTEGER", "PK"),
@@ -646,9 +647,10 @@ def page_organization(s: Sheet) -> None:
     s.wrap(M, 96, 660,
            "Реєстрація в боті створює рядок у employees: ПІБ, номер телефону "
            "(кнопкою «Поділитися номером»), необов'язковий другий номер, "
-           "компанія та посада з довідників. Роль нового — «Користувач». "
-           "Транспорт прив'язаний до компанії. Рейси (аркуш 4) посилаються і на "
-           "company, і на employees; із заявками (аркуш 2) ці таблиці не пов'язані.",
+           "компанія та посада з довідників. Роль не питається — її дає обрана "
+           "посада. Транспорт прив'язаний до компанії. Рейси (аркуш 4) "
+           "посилаються і на company, і на employees; із заявками (аркуш 2) ці "
+           "таблиці не пов'язані.",
            size=8.6, leading=11.5)
     s.text(s.W - M, 76, "аркуш 3 / 4", font="Mono", size=8, color=SLATE, align="right")
 
@@ -692,6 +694,14 @@ def page_organization(s: Sheet) -> None:
         s.arrow(right_x - 30, to_ty, left_x + left_w, to_ty, color=TEAL, width=1.2,
                 head=5)
 
+    # positions.role_id → roles.id. Ведемо ліворуч від колонки, щоб не
+    # перетинати стрілки від employees, які приходять справа.
+    pos_ty = bottoms["positions"]["role_id"]
+    roles_ty = bottoms["roles"]["id"]
+    s.line(left_x, pos_ty, left_x - 16, pos_ty, color=TEAL, width=1.2)
+    s.line(left_x - 16, pos_ty, left_x - 16, roles_ty, color=TEAL, width=1.2)
+    s.arrow(left_x - 16, roles_ty, left_x, roles_ty, color=TEAL, width=1.2, head=5)
+
     note_ty = 556
     s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
     s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
@@ -711,15 +721,16 @@ def page_organization(s: Sheet) -> None:
            "applications.telegram_user_id.",
            size=8, leading=10.5)
 
-    ty3 = s.section(M, 708, s.W - 2 * M, "довідник roles")
-    cx = M
-    for name in ("Головний адміністратор", "Адміністратор компанії", "Користувач"):
-        w = pdfmetrics.stringWidth(name, "Mono", 7.5) + 16
-        s.box(cx, ty3 - 2, w, 16, fill=PANEL_ALT, stroke=LINE_SOFT)
-        s.text(cx + 8, ty3 + 9, name, font="Mono", size=7.5, color=SLATE)
-        cx += w + 8
-    s.text(cx + 6, ty3 + 9,
-           "· positions поки містить лише «Інше»", font="Sans", size=7.5, color=SLATE)
+    ty3 = s.section(M, 700, s.W - 2 * M, "посада визначає роль")
+    for i, (left, right) in enumerate((
+        ("Директор, Менеджер, Логіст", "Адміністратор компанії"),
+        ("решта посад, зокрема заглушка «Інше»", "Користувач"),
+        ("жодна посада", "Головний адміністратор — лише вручну, з картки співробітника"),
+    )):
+        row_ty = ty3 + 12 + i * 16
+        s.text(M, row_ty, left, font="Sans-Bold", size=8, color=INK)
+        s.text(M + 230, row_ty, "→", font="Sans", size=8, color=TEAL)
+        s.text(M + 250, row_ty, right, font="Mono", size=7.5, color=SLATE)
 
     s.line(M, s.H - 34, s.W - M, s.H - 34, color=LINE, width=0.6)
     s.text(M, s.H - 22,

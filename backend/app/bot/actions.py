@@ -5,8 +5,6 @@
 живе в одному місці, а не копіюється по хендлерах.
 """
 
-from html import escape
-
 from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -179,8 +177,10 @@ async def render_positions(session: AsyncSession, *, offset: int = 0) -> Rendere
         return "Довідник посад порожній.", positions_keyboard()
 
     header = f"<b>Посади</b> — {_range_note(offset, len(positions), total)}"
-    body = "\n".join(f"#{p.id} — {escape(p.position)}" for p in positions)
-    return f"{header}\n\n{body}", positions_keyboard(offset=offset, total=total)
+    return (
+        f"{header}\nПосада визначає роль доступу. Оберіть, щоб змінити:",
+        positions_keyboard(positions, offset=offset, total=total),
+    )
 
 
 async def render_companies(session: AsyncSession, *, offset: int = 0) -> Rendered:

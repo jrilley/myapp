@@ -30,6 +30,13 @@ EMP_VIEW_PREFIX = "emp"
 EMP_EDIT_PREFIX = "empedit"
 EMP_SET_PREFIX = "empset"
 POSITION_ADD = "position:add"
+#: Роль для нової посади (крок анкети) і роль наявної посади (з довідника).
+POSITION_NEW_ROLE_PREFIX = "position:newrole"
+POSITION_CARD_PREFIX = "position:card"
+#: Відкрити вибір ролі для наявної посади…
+POSITION_SET_ROLE_PREFIX = "position:role"
+#: …і застосувати обране: position:setrole:<посада>:<роль>.
+POSITION_APPLY_ROLE_PREFIX = "position:setrole"
 
 MENU_VEHICLE_ADD = "menu:vehicle"
 #: Для адміністратора компанії — власна компанія мається на увазі.
@@ -404,16 +411,47 @@ def vehicle_card_keyboard(kind: str, vehicle_id: int, back: str) -> InlineKeyboa
 
 
 def positions_keyboard(
-    *, offset: int = 0, total: int | None = None
+    positions=(), *, offset: int = 0, total: int | None = None
 ) -> InlineKeyboardMarkup:
+    """Довідник посад: кожна — кнопка, бо посада визначає роль доступу,
+    і цю роль треба мати як переглянути, так і змінити."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Додати посаду", callback_data=POSITION_ADD)
+    for position in positions:
+        builder.button(
+            text=f"{position.position} — {position.role.role}",
+            callback_data=f"{POSITION_CARD_PREFIX}:{position.id}",
+        )
     builder.adjust(1)
     if total is not None:
         _add_pagination(
             builder, "pos", offset=offset, limit=PAGE_REFERENCE, total=total
         )
+    builder.row(
+        InlineKeyboardButton(text="➕ Додати посаду", callback_data=POSITION_ADD)
+    )
     builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
+    return builder.as_markup()
+
+
+def position_roles_keyboard(prefix: str, roles, *, back: str) -> InlineKeyboardMarkup:
+    """Вибір ролі для посади. `prefix` вирішує, куди піде вибір: у нову
+    посаду (крок анкети) чи в наявну (зміна довідника)."""
+    builder = InlineKeyboardBuilder()
+    for item_id, title in roles:
+        builder.button(text=title, callback_data=f"{prefix}:{item_id}")
+    builder.button(text="⬅️ Назад", callback_data=back)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def position_card_keyboard(position_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔑 Змінити роль",
+        callback_data=f"{POSITION_SET_ROLE_PREFIX}:{position_id}",
+    )
+    builder.button(text="⬅️ До посад", callback_data=MENU_POSITIONS)
+    builder.adjust(1)
     return builder.as_markup()
 
 

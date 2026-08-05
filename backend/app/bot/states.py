@@ -43,9 +43,14 @@ class EmployeeEdit(StatesGroup):
 
 
 class PositionForm(StatesGroup):
-    """Додавання посади в довідник."""
+    """Додавання посади в довідник.
+
+    Роль питаємо одразу: посада без ролі не має сенсу — саме вона визначає,
+    які права отримає той, кого на цю посаду призначать.
+    """
 
     name = State()
+    role = State()
 
 
 class VehicleForm(StatesGroup):

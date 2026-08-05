@@ -25,8 +25,11 @@ from app.bot.handlers.management import (
     on_employee_set,
     on_company_employees,
     on_position_add,
+    on_position_role_choice,
+    on_position_role_set,
     on_positions,
     position_name,
+    position_role,
 )
 from app.bot.keyboards import (
     EMP_EDIT_PREFIX,
@@ -35,6 +38,9 @@ from app.bot.keyboards import (
     COMPANY_EMPLOYEES_PREFIX,
     MENU_POSITIONS,
     POSITION_ADD,
+    POSITION_APPLY_ROLE_PREFIX,
+    POSITION_NEW_ROLE_PREFIX,
+    POSITION_SET_ROLE_PREFIX,
 )
 from app.bot.states import EmployeeEdit, PositionForm
 from app.models import Company, Position, Role
@@ -61,7 +67,7 @@ def state() -> FSMContext:
 async def org(session):
     """Компанія, посада і три ролі — мінімум, щоб завести співробітника."""
     company = Company(name="ТОВ Ромашка", tax_id="12345678", address="Київ")
-    position = Position(id=1, position="Інше")
+    position = Position(id=1, position="Інше", role_id=3)
     session.add_all(
         [
             company,
@@ -260,7 +266,9 @@ async def test_editing_phone_updates_the_row(session, state, access_admin, emplo
 async def test_choosing_a_position_applies_immediately(
     session, state, access_admin, employee
 ):
-    new_position = await repository.create_position(session, name="Бухгалтер")
+    new_position = await repository.create_position(
+        session, name="Бухгалтер", role_id=3
+    )
     callback = FakeCallback(
         f"{EMP_SET_PREFIX}:position:{employee.id}:{new_position.id}",
         user=FakeUser(ADMIN_ID),
@@ -271,6 +279,119 @@ async def test_choosing_a_position_applies_immediately(
     updated = await repository.get_employee(session, employee.id)
     assert updated.position.position == "Бухгалтер"
     assert callback.answered == ["Збережено"]
+
+
+# ---------------------------------------------------------------------------
+# Посада визначає роль
+# ---------------------------------------------------------------------------
+
+
+async def test_position_change_carries_the_role(session, access_admin, employee):
+    """Директор — адмінська посада, тож роль має піти за нею."""
+    director = await repository.create_position(session, name="Директор", role_id=2)
+    callback = FakeCallback(
+        f"{EMP_SET_PREFIX}:position:{employee.id}:{director.id}",
+        user=FakeUser(ADMIN_ID),
+    )
+
+    await on_employee_set(callback, session, access_admin)
+
+    updated = await repository.get_employee(session, employee.id)
+    assert updated.position.position == "Директор"
+    assert updated.role.role == ROLE_COMPANY_ADMIN
+
+
+async def test_position_change_does_not_demote_a_main_admin(
+    session, access_admin, org, employee
+):
+    """Головного адміністратора не дає жодна посада — і зняти зміною
+    посади його теж не можна, інакше система лишиться без власника."""
+    await repository.update_employee(session, employee, role_id=1)
+    ordinary = await repository.create_position(session, name="Водій", role_id=3)
+    callback = FakeCallback(
+        f"{EMP_SET_PREFIX}:position:{employee.id}:{ordinary.id}",
+        user=FakeUser(ADMIN_ID),
+    )
+
+    await on_employee_set(callback, session, access_admin)
+
+    updated = await repository.get_employee(session, employee.id)
+    assert updated.position.position == "Водій"
+    assert updated.role.role == ROLE_MAIN_ADMIN
+
+
+async def test_changing_a_position_role_updates_its_employees(
+    session, state, access_admin, org, employee
+):
+    _, position = org
+    callback = FakeCallback(
+        f"{POSITION_APPLY_ROLE_PREFIX}:{position.id}:2", user=FakeUser(ADMIN_ID)
+    )
+
+    await on_position_role_set(callback, session, access_admin)
+
+    updated = await repository.get_employee(session, employee.id)
+    assert updated.role.role == ROLE_COMPANY_ADMIN
+    assert "1" in callback.message.answers[0]  # скільки людей зачепило
+
+
+async def test_changing_a_position_role_spares_main_admins(
+    session, access_admin, org, employee
+):
+    _, position = org
+    await repository.update_employee(session, employee, role_id=1)
+    callback = FakeCallback(
+        f"{POSITION_APPLY_ROLE_PREFIX}:{position.id}:2", user=FakeUser(ADMIN_ID)
+    )
+
+    await on_position_role_set(callback, session, access_admin)
+
+    updated = await repository.get_employee(session, employee.id)
+    assert updated.role.role == ROLE_MAIN_ADMIN
+
+
+async def test_position_cannot_grant_main_admin(
+    session, access_admin, org, employee
+):
+    """Інакше власником системи можна було б стати призначенням на посаду."""
+    _, position = org
+    callback = FakeCallback(
+        f"{POSITION_APPLY_ROLE_PREFIX}:{position.id}:1", user=FakeUser(ADMIN_ID)
+    )
+
+    await on_position_role_set(callback, session, access_admin)
+
+    assert callback.answered == ["Невідома посада або роль"]
+    refreshed = await repository.get_position(session, position.id)
+    assert refreshed.role_id == 3
+
+
+async def test_role_choices_for_a_position_exclude_main_admin(
+    session, access_admin, org
+):
+    _, position = org
+    callback = FakeCallback(
+        f"{POSITION_SET_ROLE_PREFIX}:{position.id}", user=FakeUser(ADMIN_ID)
+    )
+
+    await on_position_role_choice(callback, session, access_admin)
+
+    labels = [
+        b.text for row in callback.message.markups[0].inline_keyboard for b in row
+    ]
+    assert ROLE_COMPANY_ADMIN in labels and ROLE_USER in labels
+    assert ROLE_MAIN_ADMIN not in labels
+
+
+async def test_employee_card_marks_a_manual_role(session, state, access_admin, employee):
+    """Роль, яку посада не дає, має бути позначена — інакше незрозуміло,
+    звідки в людини права."""
+    await repository.update_employee(session, employee, role_id=2)
+    callback = FakeCallback(f"{EMP_VIEW_PREFIX}:{employee.id}", user=FakeUser(ADMIN_ID))
+
+    await on_employee_card(callback, state, session, access_admin)
+
+    assert "призначено вручну" in callback.message.answers[0]
 
 
 async def test_role_can_be_raised(session, state, access_admin, employee):
@@ -321,28 +442,42 @@ async def test_malformed_set_payload_does_not_crash(session, access_admin):
 # ---------------------------------------------------------------------------
 
 
-async def test_positions_are_listed(session, state, access_admin, org):
+async def test_positions_are_listed_with_the_role_they_grant(
+    session, state, access_admin, org
+):
     callback = FakeCallback(MENU_POSITIONS, user=FakeUser(ADMIN_ID))
 
     await on_positions(callback, state, session, access_admin)
 
-    assert "Інше" in callback.message.answers[0]
-    assert callback_data(callback.message.markups[0])[0] == POSITION_ADD
+    labels = [
+        b.text for row in callback.message.markups[0].inline_keyboard for b in row
+    ]
+    assert f"Інше — {ROLE_USER}" in labels
+    assert POSITION_ADD in callback_data(callback.message.markups[0])
 
 
-async def test_adding_a_position(session, state, access_admin, org):
+async def test_adding_a_position_asks_which_role_it_grants(
+    session, state, access_admin, org
+):
     await on_position_add(
         FakeCallback(POSITION_ADD, user=FakeUser(ADMIN_ID)), state, access_admin
     )
     assert await state.get_state() == PositionForm.name
 
-    message = FakeMessage("Менеджер з продажу")
-    await position_name(message, state, session)
+    await position_name(FakeMessage("Менеджер з продажу"), state, session)
+    # Посада без ролі не створюється: спершу питаємо, що вона дає.
+    assert await state.get_state() == PositionForm.role
+    assert not await repository.get_position_by_name(session, "Менеджер з продажу")
 
-    positions = [p.position for p in await repository.list_positions(session)]
-    assert "Менеджер з продажу" in positions
+    callback = FakeCallback(
+        f"{POSITION_NEW_ROLE_PREFIX}:2", user=FakeUser(ADMIN_ID)
+    )
+    await position_role(callback, state, session, access_admin)
+
+    created = await repository.get_position_by_name(session, "Менеджер з продажу")
+    assert created is not None
+    assert created.role.role == ROLE_COMPANY_ADMIN
     assert await state.get_state() is None
-    assert "додано" in message.answers[0]
 
 
 async def test_duplicate_position_is_refused(session, state, access_admin, org):

@@ -12,13 +12,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
 from app.config import Settings
-from app.models import Employee
 
-ROLE_MAIN_ADMIN = "Головний адміністратор"
-ROLE_COMPANY_ADMIN = "Адміністратор компанії"
-ROLE_USER = "Користувач"
+# Назви ролей оголошені в моделях: на них спираються і сіди міграцій, і
+# репозиторій, а імпорт звідти в бік бота був би зворотним.
+from app.models import (  # noqa: F401  — реекспорт, на нього спираються хендлери
+    ROLE_COMPANY_ADMIN,
+    ROLE_MAIN_ADMIN,
+    ROLE_USER,
+    Employee,
+)
 
 ADMIN_ROLES = frozenset({ROLE_MAIN_ADMIN, ROLE_COMPANY_ADMIN})
+
+__all__ = [
+    "ADMIN_ONLY",
+    "ADMIN_ROLES",
+    "MAIN_ADMIN_ONLY",
+    "ROLE_COMPANY_ADMIN",
+    "ROLE_MAIN_ADMIN",
+    "ROLE_USER",
+    "Access",
+    "resolve_access",
+    "resolve_company_id",
+]
 
 
 @dataclass(frozen=True)

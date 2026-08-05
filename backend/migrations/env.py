@@ -2,6 +2,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.config import get_settings
@@ -45,9 +46,45 @@ def _run_migrations(connection) -> None:
     with context.begin_transaction():
         context.run_migrations()
 
+    if connection.dialect.name == "sqlite":
+        # Ключі під час міграцій вимкнені (див. _disable_foreign_keys), тож
+        # звіряємо цілісність самі. Краще впасти тут, ніж лишити в базі
+        # посилання в нікуди. Транзакція вище вже закрита — це чисте читання.
+        broken = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+        if broken:
+            raise RuntimeError(
+                "Міграція лишила посилання в нікуди "
+                f"(таблиця, rowid, ціль, номер ключа): {broken}"
+            )
+
+
+def _disable_foreign_keys(engine: AsyncEngine) -> None:
+    """Вимикає перевірку зовнішніх ключів на час міграцій.
+
+    Batch-режим перебудовує таблицю через CREATE tmp → DROP стара → RENAME,
+    а DROP батьківської таблиці з увімкненими ключами SQLite не пропускає —
+    навіть якщо після перейменування все знову цілісне.
+
+    Ставимо саме на «connect», а не окремим запитом: PRAGMA не діє всередині
+    транзакції, а будь-який exec_driver_sql на з'єднанні SQLAlchemy її
+    відкриває — і тоді коміт міграції дістається зовнішній транзакції, якої
+    ніхто не комітить, тож зміни мовчки відкочуються при закритті.
+
+    Обробник вішається після того, який ставить app.db, і перекриває його:
+    події SQLAlchemy виконуються в порядку реєстрації.
+    """
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _off(dbapi_connection, _connection_record):  # pragma: no cover
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=OFF")
+        cursor.close()
+
 
 async def run_migrations_online() -> None:
     engine: AsyncEngine = create_engine(_database_url())
+    if engine.dialect.name == "sqlite":
+        _disable_foreign_keys(engine)
     async with engine.connect() as connection:
         await connection.run_sync(_run_migrations)
     await engine.dispose()

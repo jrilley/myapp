@@ -15,9 +15,13 @@ from app.models import Company, Employee, Position, Role, Trailer, Truck
 
 async def _fixtures(session):
     company = Company(name="ТОВ Ромашка", tax_id="12345678", address="Київ, вул. Хрещатик, 1")
-    position = Position(position="Менеджер")
     role = Role(role="admin")
-    session.add_all([company, position, role])
+    session.add_all([company, role])
+    await session.commit()
+    # Посада не існує без ролі: саме вона визначає права того, кого на цю
+    # посаду призначать, тож роль має бути створена першою.
+    position = Position(position="Менеджер", role_id=role.id)
+    session.add(position)
     await session.commit()
     return company, position, role
 
@@ -109,10 +113,32 @@ async def test_company_tax_id_is_unique(session):
     [(Position, "position", "Бухгалтер"), (Role, "role", "manager")],
 )
 async def test_reference_names_are_unique(session, model, field, value):
-    session.add(model(**{field: value}))
+    extra = {}
+    if model is Position:
+        # Посада не існує без ролі — вона і є її сенсом.
+        role = Role(role="користувач")
+        session.add(role)
+        await session.commit()
+        extra["role_id"] = role.id
+
+    session.add(model(**{field: value}, **extra))
     await session.commit()
 
-    session.add(model(**{field: value}))
+    session.add(model(**{field: value}, **extra))
+    with pytest.raises(IntegrityError):
+        await session.commit()
+
+
+async def test_position_requires_a_role(session):
+    """NOT NULL на positions.role_id: посада без ролі нічого не означає."""
+    session.add(Position(position="Без ролі"))
+    with pytest.raises(IntegrityError):
+        await session.commit()
+
+
+async def test_position_role_must_exist(session):
+    """І зовнішній ключ теж діє — роль має бути справжньою."""
+    session.add(Position(position="Неіснуюча роль", role_id=999999))
     with pytest.raises(IntegrityError):
         await session.commit()
 
