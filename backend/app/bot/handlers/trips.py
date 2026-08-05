@@ -529,22 +529,34 @@ async def _announce(session: AsyncSession, publisher: Publisher, trip: Trip) -> 
     else:
         notes.append("Водій сторонній — сповіщення не надсилалось.")
 
-    chat_id = trip.client_company.company_chat_id if trip.client_company else None
+    company = trip.client_company
+    chat_id = company.company_chat_id if company else None
     if chat_id is None:
         notes.append("Робочий чат компанії не вказано — рейс нікуди не дубльовано.")
     else:
-        message_id = await publisher.send(
+        sent = await publisher.send(
             chat_id, f"🆕 <b>Новий рейс</b>\n\n{format_trip(trip)}"
         )
-        if message_id is None:
+        if sent is None:
             notes.append(
                 "⚠️ У робочий чат не вдалося — перевірте, чи бот доданий у групу."
             )
         else:
             await repository.set_trip_chat_message(
-                session, trip, chat_id=chat_id, message_id=message_id
+                session, trip, chat_id=sent.chat_id, message_id=sent.message_id
             )
             notes.append("Продубльовано в робочий чат.")
+            if sent.chat_id != chat_id:
+                # Група стала супергрупою й змінила id. Старий мертвий, тож
+                # запам'ятовуємо новий одразу — інакше кожен наступний рейс
+                # так само впирався б у неіснуючий чат.
+                await repository.update_company(
+                    session, company, company_chat_id=sent.chat_id
+                )
+                notes.append(
+                    f"Групу оновлено до супергрупи — id чату змінено на "
+                    f"<code>{sent.chat_id}</code>."
+                )
 
     return "\n".join(notes)
 

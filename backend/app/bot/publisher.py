@@ -1,13 +1,30 @@
 import logging
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramForbiddenError,
+    TelegramMigrateToChat,
+)
 
 from app.bot.formatting import format_for_group
 from app.models import Application
 
 logger = logging.getLogger(__name__)
+
+
+class Sent(NamedTuple):
+    """Результат надсилання.
+
+    `chat_id` повертаємо разом із message_id, бо він може відрізнятись від
+    того, що просили: коли звичайна група стає супергрупою, Telegram міняє їй
+    id. Хто зберігає посилання на чат, має дізнатись про це — інакше кожне
+    наступне надсилання йтиме на мертвий id.
+    """
+
+    message_id: int
+    chat_id: int
 
 
 class Publisher(Protocol):
@@ -21,9 +38,9 @@ class Publisher(Protocol):
     ) -> None:
         """Прибрати опубліковане повідомлення (best-effort)."""
 
-    async def send(self, chat_id: int, text: str) -> int | None:
+    async def send(self, chat_id: int, text: str) -> Sent | None:
         """Надіслати текст у довільний чат: робочий чат компанії або приватний
-        чат водія. Повертає message_id або None, якщо не дійшло."""
+        чат водія. None — якщо не дійшло."""
 
 
 class TelegramPublisher:
@@ -31,9 +48,17 @@ class TelegramPublisher:
         self._bot = bot
         self._chat_id = chat_id
 
-    async def send(self, chat_id: int, text: str) -> int | None:
+    async def send(self, chat_id: int, text: str) -> Sent | None:
         try:
             message = await self._bot.send_message(chat_id, text)
+        except TelegramMigrateToChat as exc:
+            # Звичайна група стала супергрупою — Telegram видав їй новий id і
+            # каже, який саме. Старий мертвий назавжди, тож повторюємо один
+            # раз і віддаємо новий id викликачу, щоб той його зберіг.
+            #
+            # Гілка має бути ПЕРЕД TelegramAPIError: це його підклас.
+            logger.warning("Чат %s мігрував у %s", chat_id, exc.migrate_to_chat_id)
+            return await self._send_once(exc.migrate_to_chat_id, text)
         except TelegramForbiddenError:
             # Найчастіший випадок, і не помилка як така: людина не натискала
             # /start або заблокувала бота, або бота прибрали з чату. Telegram
@@ -43,7 +68,17 @@ class TelegramPublisher:
         except TelegramAPIError:
             logger.exception("Не вдалося надіслати повідомлення в чат %s", chat_id)
             return None
-        return message.message_id
+        return Sent(message.message_id, chat_id)
+
+    async def _send_once(self, chat_id: int, text: str) -> Sent | None:
+        """Повторна спроба після міграції. Без рекурсії: двічі поспіль
+        мігрувати чат не може, а нескінченний цикл — може."""
+        try:
+            message = await self._bot.send_message(chat_id, text)
+        except TelegramAPIError:
+            logger.exception("Не вдалося надіслати повідомлення в чат %s", chat_id)
+            return None
+        return Sent(message.message_id, chat_id)
 
     async def publish(self, application: Application) -> tuple[int, int] | None:
         if self._chat_id is None:
@@ -92,5 +127,5 @@ class NullPublisher:
     ) -> None:
         return None
 
-    async def send(self, chat_id: int, text: str) -> int | None:
+    async def send(self, chat_id: int, text: str) -> Sent | None:
         return None

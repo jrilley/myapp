@@ -6,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_publisher
 from app.bot import constants
 from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER, Access
+from app.bot.publisher import Sent
 from app.config import Settings, get_settings
 from app.db import Base, create_engine, get_db
 from app.main import create_app
@@ -149,6 +150,8 @@ class FakePublisher:
         #: Куди «не вдалося» надіслати — так перевіряється, що збій розсилки
         #: не ламає дію користувача.
         self.unreachable: set[int] = set()
+        #: Старий id → новий: імітує групу, що стала супергрупою.
+        self.migrated: dict[int, int] = {}
         self.chat_id = -1001234567890
         self.message_id = 555
 
@@ -161,11 +164,14 @@ class FakePublisher:
     ) -> None:
         self.retracted.append((chat_id, message_id))
 
-    async def send(self, chat_id: int, text: str) -> int | None:
+    async def send(self, chat_id: int, text: str) -> Sent | None:
+        # Міграцію відпрацьовує сам TelegramPublisher, тож назовні видно вже
+        # результат: повідомлення пішло в новий чат.
+        chat_id = self.migrated.get(chat_id, chat_id)
         if chat_id in self.unreachable:
             return None
         self.sent.append((chat_id, text))
-        return self.message_id
+        return Sent(self.message_id, chat_id)
 
 
 @pytest.fixture

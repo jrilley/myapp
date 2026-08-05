@@ -496,6 +496,25 @@ async def test_unreachable_driver_does_not_lose_the_trip(
     assert "не вдалося написати" in callback.message.answers[0]
 
 
+async def test_supergroup_migration_updates_the_company(
+    session, state, world, logist, publisher
+):
+    """Група стала супергрупою — старий id мертвий назавжди. Запам'ятовуємо
+    новий одразу, інакше кожен наступний рейс упирався б у той самий глухий кут.
+    """
+    new_chat = -1004380122313
+    publisher.migrated[OUR_CHAT_ID] = new_chat
+    callback = await fill_form(state, session, logist, exporter_id=world.theirs.id)
+
+    await step_confirm(callback, state, session, publisher, logist)
+
+    trips, _ = await repository.list_trips(session)
+    assert trips[0].chat_id == new_chat
+    company = await repository.get_company(session, world.ours.id)
+    assert company.company_chat_id == new_chat
+    assert "id чату змінено" in callback.message.answers[0]
+
+
 async def test_missing_working_chat_is_reported(
     session, state, world, logist, publisher
 ):
