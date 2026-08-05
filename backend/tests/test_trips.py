@@ -457,6 +457,27 @@ async def test_driver_is_notified_and_chat_gets_a_copy(
     assert trips[0].chat_message_id == publisher.message_id
 
 
+async def test_confirmation_survives_a_fresh_session(
+    session_factory, session, state, world, logist, publisher
+):
+    """Хендлер працює на сесії, відкритій під цей апдейт, — а не на тій, у
+    якій щойно створили довідники. Різниця не косметична: у «своїй» сесії
+    компанії лежать в identity map, і ліниве завантаження мовчки бере їх
+    звідти, ховаючи те, що зв'язки вже не завантажені.
+    """
+    callback = await fill_form(
+        state, session, logist,
+        exporter_id=world.theirs.id, driver_id=world.driver.id,
+    )
+
+    async with session_factory() as fresh:
+        await step_confirm(callback, state, fresh, publisher, logist)
+
+    # Картка рейсу дійшла до логіста цілою, з обома компаніями.
+    assert "Alebor IT 000000" in callback.message.answers[0]
+    assert "ТОВ Чужа 99999999" in callback.message.answers[0]
+
+
 async def test_unreachable_driver_does_not_lose_the_trip(
     session, state, world, logist, publisher
 ):
@@ -523,7 +544,7 @@ async def test_driver_may_look_but_not_edit(session, state, world):
 
 
 async def test_delete_clears_the_chat_and_tells_the_driver(
-    session, world, logist, publisher
+    session_factory, session, world, logist, publisher
 ):
     trip = await make_trip(
         session, world.logist, world.theirs, driver_id=world.driver.id
@@ -533,10 +554,13 @@ async def test_delete_clears_the_chat_and_tells_the_driver(
     )
     callback = FakeCallback(f"{TRIP_DELETE_PREFIX}:{trip.id}", user=FakeUser(OWNER_ID))
 
-    await on_trip_delete(callback, session, publisher, logist)
+    # Сесія під апдейт — окрема, як у бойовому боті.
+    async with session_factory() as fresh:
+        await on_trip_delete(callback, fresh, publisher, logist)
 
     assert publisher.retracted == [(OUR_CHAT_ID, 777)]
     assert any(chat == DRIVER_ID and "скасовано" in text for chat, text in publisher.sent)
+    assert await repository.get_trip(session, trip.id) is None
 
 
 # ---------------------------------------------------------------------------

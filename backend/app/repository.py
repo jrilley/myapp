@@ -292,10 +292,13 @@ async def create_company(
 
 
 async def update_company(session: AsyncSession, company: Company, **fields) -> Company:
+    # Без refresh: нові значення вже в об'єкті, а перечитування погасило б
+    # завантажені зв'язки. Refresh доречний після INSERT — там він приносить
+    # id і серверні значення за замовчуванням, — але не після UPDATE, у якому
+    # ми самі проставили все, що змінилось.
     for name, value in fields.items():
         setattr(company, name, value)
     await session.commit()
-    await session.refresh(company)
     return company
 
 
@@ -346,7 +349,6 @@ async def set_position_self_service(
     """
     position.self_service = value
     await session.commit()
-    await session.refresh(position)
     return position
 
 
@@ -576,19 +578,26 @@ async def update_trip(
 async def set_trip_chat_message(
     session: AsyncSession, trip: Trip, *, chat_id: int, message_id: int
 ) -> Trip:
-    """Куди продубльовано рейс. Без цього його не прибрати з чату потім."""
+    """Куди продубльовано рейс. Без цього його не прибрати з чату потім.
+
+    Без refresh навмисно. Нові значення вже проставлені в Python, а перечитати
+    рядок означало б погасити завантажені зв'язки: refresh скидає ВСІ
+    атрибути, але перезавантажує лише колонки. Наступне звернення до
+    trip.exporter_company пішло б у БД лінивим завантаженням — а в async-сесії
+    це MissingGreenlet, і рейс, уже створений, обривався б помилкою на
+    відповіді користувачу.
+    """
     trip.chat_id = chat_id
     trip.chat_message_id = message_id
     await session.commit()
-    await session.refresh(trip)
     return trip
 
 
 async def soft_delete_trip(session: AsyncSession, trip: Trip, *, deleted_by: int) -> Trip:
+    # Так само без refresh — див. set_trip_chat_message.
     trip.deleted_by = deleted_by
     trip.deleted_at = _utc_now()
     await session.commit()
-    await session.refresh(trip)
     return trip
 
 
