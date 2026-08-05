@@ -13,6 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app import repository
 from app.bot.constants import CATEGORIES
 from app.bot.handlers.common import (
+    APPLICATIONS_OFF,
     cmd_start,
     on_all,
     on_back,
@@ -52,18 +53,29 @@ from tests.conftest import (
     make_access,
 )
 
-USER_MENU = [MENU_TRIP_NEW, MENU_TRIPS, MENU_NEW, MENU_MY, MENU_HELP]
+#: Меню за замовчуванням: стара анкета заявок вимкнена прапорцем
+#: constants.SHOW_APPLICATIONS, тож її кнопок тут немає.
+USER_MENU = [MENU_TRIP_NEW, MENU_TRIPS, MENU_HELP]
 #: Головний адмін заходить у транспорт і працівників через компанію.
 ADMIN_MENU = [
-    MENU_TRIP_NEW, MENU_TRIPS, MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS,
-    MENU_VEHICLE_ADD, MENU_COMPANIES, MENU_POSITIONS, MENU_HELP,
+    MENU_TRIP_NEW, MENU_TRIPS, MENU_VEHICLE_ADD,
+    MENU_COMPANIES, MENU_POSITIONS, MENU_HELP,
 ]
 #: Адміністратор компанії бачить лише свою, тож заходить напряму.
 COMPANY_ADMIN_MENU = [
-    MENU_TRIP_NEW, MENU_TRIPS, MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS,
-    MENU_VEHICLE_ADD, MENU_MY_VEHICLES, MENU_MY_EMPLOYEES, MENU_HELP,
+    MENU_TRIP_NEW, MENU_TRIPS, MENU_VEHICLE_ADD,
+    MENU_MY_VEHICLES, MENU_MY_EMPLOYEES, MENU_HELP,
 ]
 GUEST_MENU = [REG_START, MENU_HELP]
+
+#: Те саме меню з увімкненими заявками — на випадок повернення прапорця.
+USER_MENU_WITH_APPLICATIONS = [
+    MENU_TRIP_NEW, MENU_TRIPS, MENU_NEW, MENU_MY, MENU_HELP,
+]
+ADMIN_MENU_WITH_APPLICATIONS = [
+    MENU_TRIP_NEW, MENU_TRIPS, MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS,
+    MENU_VEHICLE_ADD, MENU_COMPANIES, MENU_POSITIONS, MENU_HELP,
+]
 
 
 @pytest.fixture
@@ -112,12 +124,51 @@ async def test_menu_depends_on_who_opened_it(state, access, access_admin, access
     assert callback_data(guest.markups[0]) == GUEST_MENU
 
 
+async def test_applications_come_back_with_the_flag(
+    state, access, access_admin, applications_enabled
+):
+    """Прапорець — єдиний вимикач: із ним меню знову таке, як було."""
+    plain, admin = FakeMessage(), FakeMessage()
+
+    await cmd_start(plain, state, access)
+    await cmd_start(admin, state, access_admin)
+
+    assert callback_data(plain.markups[0]) == USER_MENU_WITH_APPLICATIONS
+    assert callback_data(admin.markups[0]) == ADMIN_MENU_WITH_APPLICATIONS
+
+
+@pytest.mark.parametrize(
+    ("handler", "data"),
+    [(on_my, MENU_MY), (on_all, MENU_ALL), (on_stats, MENU_STATS)],
+)
+async def test_disabled_applications_refuse_a_forged_callback(
+    session, state, access_admin, handler, data
+):
+    """Кнопок у меню немає, але callback_data з попереднього повідомлення
+    лишається робочою — тому відмову дає хендлер, а не клавіатура."""
+    callback = FakeCallback(data, user=FakeUser(ADMIN_ID))
+
+    await handler(callback, state, session, access_admin)
+
+    assert callback.answered == [APPLICATIONS_OFF]
+    assert not callback.message.answers
+
+
+async def test_disabled_form_cannot_be_started(state, access):
+    callback = FakeCallback(MENU_NEW)
+
+    await on_menu_new(callback, state, access)
+
+    assert await state.get_state() is None
+    assert callback.answered == [APPLICATIONS_OFF]
+
+
 # ---------------------------------------------------------------------------
 # Анкета заявки
 # ---------------------------------------------------------------------------
 
 
-async def test_menu_button_starts_the_form(state, access):
+async def test_menu_button_starts_the_form(state, access, applications_enabled):
     callback = FakeCallback(MENU_NEW)
 
     await on_menu_new(callback, state, access)
@@ -127,7 +178,7 @@ async def test_menu_button_starts_the_form(state, access):
     assert callback_data(callback.message.markups[0]) == [FORM_CANCEL]
 
 
-async def test_unregistered_cannot_start_the_form(state, access_guest):
+async def test_unregistered_cannot_start_the_form(state, access_guest, applications_enabled):
     """Кнопки «Нова заявка» гостю не видно, але callback_data можна
     переслати — тому перевірка має бути в хендлері."""
     callback = FakeCallback(MENU_NEW, user=FakeUser(STRANGER_ID))
@@ -139,7 +190,7 @@ async def test_unregistered_cannot_start_the_form(state, access_guest):
     assert callback_data(callback.message.markups[0]) == [REG_START]
 
 
-async def test_cancel_button_works_from_any_step(state, access):
+async def test_cancel_button_works_from_any_step(state, access, applications_enabled):
     await on_menu_new(FakeCallback(MENU_NEW), state, access)
     await step_full_name(FakeMessage("Іван Петренко"), state)
     assert await state.get_state() == ApplicationForm.contact
@@ -148,10 +199,10 @@ async def test_cancel_button_works_from_any_step(state, access):
     await on_cancel(callback, state, access)
 
     assert await state.get_state() is None
-    assert callback_data(callback.message.markups[0]) == USER_MENU
+    assert callback_data(callback.message.markups[0]) == USER_MENU_WITH_APPLICATIONS
 
 
-async def test_category_step_offers_cancel_alongside_categories(state, access):
+async def test_category_step_offers_cancel_alongside_categories(state, access, applications_enabled):
     await on_menu_new(FakeCallback(MENU_NEW), state, access)
     await step_full_name(FakeMessage("Іван Петренко"), state)
     message = FakeMessage("+380000000000")
@@ -168,7 +219,7 @@ async def test_category_step_offers_cancel_alongside_categories(state, access):
 # ---------------------------------------------------------------------------
 
 
-async def test_my_lists_applications_with_a_delete_button_each(session, state, access):
+async def test_my_lists_applications_with_a_delete_button_each(session, state, access, applications_enabled):
     first = await _make(session, description="перша заявка користувача")
     second = await _make(session, description="друга заявка користувача")
     callback = FakeCallback(MENU_MY)
@@ -181,7 +232,7 @@ async def test_my_lists_applications_with_a_delete_button_each(session, state, a
     assert data[-1] == MENU_BACK
 
 
-async def test_empty_list_still_offers_a_way_back(session, state, access):
+async def test_empty_list_still_offers_a_way_back(session, state, access, applications_enabled):
     callback = FakeCallback(MENU_MY)
 
     await on_my(callback, state, session, access)
@@ -237,7 +288,7 @@ async def test_delete_button_with_broken_payload_does_not_crash(
 # ---------------------------------------------------------------------------
 
 
-async def test_admin_actions_reject_a_non_admin(session, state, access):
+async def test_admin_actions_reject_a_non_admin(session, state, access, applications_enabled):
     """Кнопки не видно звичайному користувачу, але callback_data можна
     переслати або підробити — право має перевірятись на кожному виклику."""
     for handler, data in ((on_all, MENU_ALL), (on_stats, MENU_STATS)):
@@ -249,7 +300,7 @@ async def test_admin_actions_reject_a_non_admin(session, state, access):
         assert not callback.message.answers
 
 
-async def test_admin_sees_applications_of_every_user(session, state, access_admin):
+async def test_admin_sees_applications_of_every_user(session, state, access_admin, applications_enabled):
     await _make(session, telegram_user_id=OWNER_ID, description="заявка власника")
     await _make(
         session, telegram_user_id=STRANGER_ID, telegram_username=None,
@@ -267,7 +318,7 @@ async def test_admin_sees_applications_of_every_user(session, state, access_admi
     assert f"id{STRANGER_ID}" in text
 
 
-async def test_stats_counts_live_and_deleted(session, state, access_admin):
+async def test_stats_counts_live_and_deleted(session, state, access_admin, applications_enabled):
     await _make(session, description="ця заявка лишається")
     removed = await _make(session, description="цю заявку видалимо")
     await repository.soft_delete_application(session, removed)

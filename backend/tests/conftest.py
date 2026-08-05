@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_publisher
+from app.bot import constants
 from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER, Access
 from app.config import Settings, get_settings
 from app.db import Base, create_engine, get_db
@@ -101,6 +102,17 @@ def make_access(
         employee=employee,
         bootstrap_admin=bootstrap_admin,
     )
+
+
+@pytest.fixture
+def applications_enabled(monkeypatch) -> None:
+    """Вмикає стару анкету заявок на час тесту.
+
+    За замовчуванням вона вимкнена (constants.SHOW_APPLICATIONS), але код
+    лишається живим — і має лишатись перевіреним, інакше повернути його
+    одним рядком уже не вийде.
+    """
+    monkeypatch.setattr(constants, "SHOW_APPLICATIONS", True)
 
 
 @pytest.fixture

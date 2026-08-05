@@ -146,6 +146,7 @@ def format_trip(trip: Trip) -> str:
             f"<b>Маса, кг:</b> брутто {trip.b_mass} · тара {trip.t_mass} · "
             f"нетто {trip.n_mass}"
         )
+    extras.append(f"<i>Створено: {escape(trip.created_at)}</i>")
     if trip.updated_at:
         extras.append(f"<i>Змінено: {escape(trip.updated_at)}</i>")
     if extras:

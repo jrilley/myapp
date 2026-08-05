@@ -337,9 +337,9 @@ class Trip(Base):
 
     Дати й час зберігаються текстом, як у вихідній схемі. Формати фіксовані,
     щоб сортування рядком збігалося з хронологією:
-      arrival_date                — «РРРР-ММ-ДД»
-      datetime_entry/_departure   — «РРРР-ММ-ДД ГГ:ХХ», місцевий час
-      updated_at/deleted_at       — ISO-8601 UTC, проставляє репозиторій
+      arrival_date                        — «РРРР-ММ-ДД»
+      datetime_entry/_departure           — «РРРР-ММ-ДД ГГ:ХХ», місцевий час
+      created_at/updated_at/deleted_at    — ISO-8601 UTC, проставляє репозиторій
     """
 
     __tablename__ = "trips"
@@ -415,6 +415,16 @@ class Trip(Base):
     )
     n_mass: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0", doc="Нетто, кг. При створенні 0."
+    )
+
+    created_at: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        doc=(
+            "Коли рейс створено, ISO-8601 UTC. Не сортувальне поле — списки "
+            "йдуть за датою прибуття, — але без нього неможливо сказати, коли "
+            "рейс з'явився: updated_at і deleted_at при створенні порожні."
+        ),
     )
 
     # У вихідній схемі edited_by був NOT NULL, але той самий опис каже, що при

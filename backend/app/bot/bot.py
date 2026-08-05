@@ -8,6 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.bot import constants
 from app.bot.handlers import build_router
 from app.bot.middlewares import AccessMiddleware, DbSessionMiddleware
 from app.bot.publisher import Publisher
@@ -19,8 +20,14 @@ logger = logging.getLogger(__name__)
 # але так команди теж можна вибрати зі списку, а не набирати вручну.
 BOT_COMMANDS = [
     BotCommand(command="start", description="Головне меню"),
-    BotCommand(command="new", description="Нова заявка"),
-    BotCommand(command="my", description="Мої заявки"),
+    *(
+        [
+            BotCommand(command="new", description="Нова заявка"),
+            BotCommand(command="my", description="Мої заявки"),
+        ]
+        if constants.SHOW_APPLICATIONS
+        else []
+    ),
     BotCommand(command="cancel", description="Перервати заповнення"),
     BotCommand(command="help", description="Довідка"),
 ]

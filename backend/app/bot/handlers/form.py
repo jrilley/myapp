@@ -5,6 +5,8 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
+from app.bot import constants
+from app.bot.access import Access
 from app.bot.constants import (
     CATEGORIES,
     MAX_CONTACT,
@@ -12,8 +14,8 @@ from app.bot.constants import (
     MAX_FULL_NAME,
     MIN_DESCRIPTION,
 )
-from app.bot.access import Access
 from app.bot.formatting import format_summary
+from app.bot.handlers.common import APPLICATIONS_OFF
 from app.bot.keyboards import (
     CATEGORY_PREFIX,
     CONFIRM_NO,
@@ -44,8 +46,19 @@ async def _start_form(state: FSMContext) -> None:
     await state.set_state(ApplicationForm.full_name)
 
 
+def _menu(access: Access):
+    return main_menu_keyboard(
+        is_registered=access.is_registered,
+        is_admin=access.is_admin,
+        is_main_admin=access.is_main_admin,
+    )
+
+
 @router.message(Command("new"))
 async def cmd_new(message: Message, state: FSMContext, access: Access) -> None:
+    if not constants.SHOW_APPLICATIONS:
+        await message.answer(APPLICATIONS_OFF, reply_markup=_menu(access))
+        return
     if not access.is_registered:
         await message.answer(NOT_REGISTERED, reply_markup=registration_prompt_keyboard())
         return
@@ -57,11 +70,15 @@ async def cmd_new(message: Message, state: FSMContext, access: Access) -> None:
 async def on_menu_new(
     callback: CallbackQuery, state: FSMContext, access: Access
 ) -> None:
+    # Кнопки «Нова заявка» зараз немає в меню взагалі, а раніше її не бачив
+    # незареєстрований — але callback_data можна переслати або підробити,
+    # тому обидві перевірки живуть тут, а не в клавіатурі.
+    if not constants.SHOW_APPLICATIONS:
+        await callback.answer(APPLICATIONS_OFF, show_alert=True)
+        return
     await callback.answer()
     if callback.message is None:
         return
-    # Кнопки «Нова заявка» незареєстрованому не видно, але callback_data
-    # можна переслати — тому перевіряємо, а не покладаємось на меню.
     if not access.is_registered:
         await callback.message.answer(
             NOT_REGISTERED, reply_markup=registration_prompt_keyboard()

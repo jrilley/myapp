@@ -9,6 +9,10 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+# Модуль, а не значення: SHOW_APPLICATIONS читається під час виклику, тож
+# прапорець можна перемкнути в рантаймі — і тести на заявки лишаються
+# робочими, поки код заявок живий.
+from app.bot import constants
 from app.bot.constants import CATEGORIES
 from app.models import Application
 
@@ -203,11 +207,13 @@ def main_menu_keyboard(
 
     builder.button(text="🚛 Новий рейс", callback_data=MENU_TRIP_NEW)
     builder.button(text="🧾 Рейси", callback_data=MENU_TRIPS)
-    builder.button(text="📝 Нова заявка", callback_data=MENU_NEW)
-    builder.button(text="📋 Мої заявки", callback_data=MENU_MY)
+    if constants.SHOW_APPLICATIONS:
+        builder.button(text="📝 Нова заявка", callback_data=MENU_NEW)
+        builder.button(text="📋 Мої заявки", callback_data=MENU_MY)
     if is_admin:
-        builder.button(text="🗂 Усі заявки", callback_data=MENU_ALL)
-        builder.button(text="📊 Статистика", callback_data=MENU_STATS)
+        if constants.SHOW_APPLICATIONS:
+            builder.button(text="🗂 Усі заявки", callback_data=MENU_ALL)
+            builder.button(text="📊 Статистика", callback_data=MENU_STATS)
         builder.button(text="🚛 Додати автомобіль", callback_data=MENU_VEHICLE_ADD)
     if is_admin and not is_main_admin:
         # Адміністратор компанії бачить лише свою компанію, тож заходить

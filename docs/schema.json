@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "f159d6c59519",
+  "alembic_head": "a9550235db97",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -1338,6 +1338,24 @@
           "unique": false,
           "references": null,
           "description": "Нетто, кг. При створенні 0."
+        },
+        {
+          "name": "created_at",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Коли рейс створено, ISO-8601 UTC. Не сортувальне поле — списки йдуть за датою прибуття, — але без нього неможливо сказати, коли рейс з'явився: updated_at і deleted_at при створенні порожні."
         },
         {
           "name": "edited_by",

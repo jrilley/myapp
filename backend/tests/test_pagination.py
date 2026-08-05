@@ -31,6 +31,12 @@ from tests.conftest import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _applications_on(applications_enabled):
+    """Цей файл увесь про стару анкету заявок — вона вимкнена
+    прапорцем, але код живий і має лишатись перевіреним."""
+
+
 @pytest.fixture
 def state() -> FSMContext:
     return FSMContext(

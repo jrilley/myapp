@@ -505,7 +505,12 @@ def _trip_with_links():
 
 
 async def create_trip(session: AsyncSession, **fields) -> Trip:
-    """Створює рейс. Поля перевіряє хендлер — тут лише запис."""
+    """Створює рейс. Поля перевіряє хендлер — тут лише запис.
+
+    created_at проставляється тут, а не хендлером: так само, як edited_by в
+    update_trip. Мітку часу неможливо забути, і формат у всіх рейсів один.
+    """
+    fields.setdefault("created_at", _utc_now())
     trip = Trip(**fields)
     session.add(trip)
     await session.commit()

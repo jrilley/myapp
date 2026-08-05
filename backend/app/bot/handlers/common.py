@@ -4,6 +4,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Модуль, а не значення: прапорець читається під час виклику, тож його
+# можна перемкнути в рантаймі (див. app/bot/constants.py).
+from app.bot import constants
 from app.bot.access import (
     ADMIN_ONLY,
     MAIN_ADMIN_ONLY,
@@ -49,22 +52,25 @@ HELP_GUEST = (
 )
 
 HELP_REGISTERED = (
-    "Я веду рейси та приймаю заявки.\n\n"
+    "Я веду рейси.\n\n"
     "Користуйтесь кнопками нижче — вводити команди не потрібно.\n\n"
     "«Новий рейс» проведе по кроках: ТТН, дата прибуття, компанія-експортер, "
     "транспорт, культура й водій. Компанію-замовника та ваші контакти "
     "як логіста я підставлю сам — питати їх не буду.\n\n"
     "Якщо зручніше текстом, працюють і команди:\n"
-    "/new — нова заявка\n"
-    "/my — мої заявки\n"
-    "/cancel — перервати заповнення\n"
+    + ("/new — нова заявка\n/my — мої заявки\n" if constants.SHOW_APPLICATIONS else "")
+    + "/cancel — перервати заповнення\n"
     "/help — ця довідка"
 )
 
 ADMIN_HELP = (
-    "\n\nВи адміністратор: у меню доступні «Усі заявки» та «Статистика», "
-    "і ви можете видаляти чужі заявки."
+    "\n\nВи адміністратор: вам видно рейси всієї компанії, а головному "
+    "адміністратору — усіх компаній."
 )
+
+#: Заявки вимкнені прапорцем, але callback_data можна переслати або підробити,
+#: тому хендлери відмовляють самі, а не покладаються на приховану кнопку.
+APPLICATIONS_OFF = "Заявки наразі вимкнені — користуйтесь рейсами."
 
 
 def menu_for(access: Access):
@@ -79,6 +85,13 @@ def _help_text(access: Access) -> str:
     if not access.is_registered:
         return HELP_GUEST
     return HELP_REGISTERED + (ADMIN_HELP if access.is_admin else "")
+
+
+async def _reject_applications(callback: CallbackQuery) -> bool:
+    if constants.SHOW_APPLICATIONS:
+        return False
+    await callback.answer(APPLICATIONS_OFF, show_alert=True)
+    return True
 
 
 async def _reject_non_admin(callback: CallbackQuery, access: Access) -> bool:
@@ -134,6 +147,9 @@ async def cmd_cancel(message: Message, state: FSMContext, access: Access) -> Non
 
 @router.message(Command("my"))
 async def cmd_my(message: Message, session: AsyncSession, access: Access) -> None:
+    if not constants.SHOW_APPLICATIONS:
+        await message.answer(APPLICATIONS_OFF, reply_markup=menu_for(access))
+        return
     if not access.is_registered:
         await message.answer(_help_text(access), reply_markup=menu_for(access))
         return
@@ -145,6 +161,8 @@ async def cmd_my(message: Message, session: AsyncSession, access: Access) -> Non
 async def on_my(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
+    if await _reject_applications(callback):
+        return
     await state.clear()
     await callback.answer()
     if callback.message is None:
@@ -160,7 +178,7 @@ async def on_my(
 async def on_all(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    if await _reject_non_admin(callback, access):
+    if await _reject_applications(callback) or await _reject_non_admin(callback, access):
         return
     await state.clear()
     await callback.answer()
@@ -173,7 +191,7 @@ async def on_all(
 async def on_stats(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    if await _reject_non_admin(callback, access):
+    if await _reject_applications(callback) or await _reject_non_admin(callback, access):
         return
     await state.clear()
     await callback.answer()
@@ -206,6 +224,8 @@ async def on_page(
     kind, args, offset = parts[1], parts[2:-1], int(parts[-1])
 
     if kind == "my":
+        if await _reject_applications(callback):
+            return
         if not access.is_registered:
             await callback.answer("Спершу зареєструйтесь.", show_alert=True)
             return
@@ -213,7 +233,9 @@ async def on_page(
             session, access.telegram_user_id, offset=offset
         )
     elif kind == "all":
-        if await _reject_non_admin(callback, access):
+        if await _reject_applications(callback) or await _reject_non_admin(
+            callback, access
+        ):
             return
         rendered = await render_all_applications(session, offset=offset)
     elif kind == "trips":

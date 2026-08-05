@@ -6,6 +6,7 @@
 своєї компанії, звичайний користувач — лише власні.
 """
 
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -254,6 +255,8 @@ async def test_new_trip_starts_empty_and_unaudited(session, state, world, logist
     assert trip.datetime_entry is None and trip.datetime_departure is None
     assert trip.edited_by is None and trip.updated_at is None
     assert trip.deleted_by is None and trip.deleted_at is None
+    # created_at проставляє репозиторій — його неможливо забути.
+    assert datetime.fromisoformat(trip.created_at).tzinfo is not None
 
 
 async def test_unregistered_cannot_start_a_trip(state, access_guest):
@@ -414,6 +417,16 @@ async def test_colleague_trip_is_readable_only_by_the_admin(
         callback = FakeCallback(f"{TRIP_SHOW_PREFIX}:{trips.colleague.id}")
         await on_trip_card(callback, state, session, access)
         assert callback.answered == expected
+
+
+async def test_card_shows_when_the_trip_was_created(session, state, chief, trips):
+    """updated_at і deleted_at при створенні порожні, тож без created_at
+    з картки неможливо сказати, коли рейс з'явився."""
+    callback = FakeCallback(f"{TRIP_SHOW_PREFIX}:{trips.mine.id}", user=FakeUser(CHIEF_ID))
+
+    await on_trip_card(callback, state, session, chief)
+
+    assert f"Створено: {trips.mine.created_at}" in callback.message.answers[0]
 
 
 async def test_card_shows_both_companies(session, state, chief, trips):
