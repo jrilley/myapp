@@ -7,6 +7,7 @@
 """
 
 import importlib.util
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -34,24 +35,37 @@ from app.bot.access import (
 from app.permissions import DEFAULT_MATRIX
 from tests.conftest import make_access
 
-MIGRATION = (
-    Path(__file__).resolve().parent.parent
-    / "migrations"
-    / "versions"
-    / "6a3a66f4347b_role_permission_matrix.py"
-)
+VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
+
+#: Міграції, які торкаються матриці, у порядку застосування. Перша сіє її
+#: цілком, решта правлять окремі клітинки й оголошують це в CHANGES.
+#: DEFAULT_MATRIX має дорівнювати їхній сумі, а не самому лише сіду — інакше
+#: кожна наступна правка прав ламала б перевірку замість того, щоб її пройти.
+MATRIX_SEED = "6a3a66f4347b_role_permission_matrix.py"
+MATRIX_CHANGES = ("54ed2bf7c71c_operator_stops_editing_net_mass.py",)
 
 
-def _load_migration():
-    spec = importlib.util.spec_from_file_location("_perm_migration", MIGRATION)
+def _load_migration(name: str):
+    spec = importlib.util.spec_from_file_location("_perm_migration", VERSIONS / name)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_code_and_migration_agree():
+def _matrix_from_migrations() -> dict:
+    """Матриця такою, якою її бачить свіжо змігрована база."""
+    matrix = deepcopy(_load_migration(MATRIX_SEED).MATRIX)
+    for name in MATRIX_CHANGES:
+        for role, categories in _load_migration(name).CHANGES.items():
+            for category, fields in categories.items():
+                create, read, edit, delete, scope, _ = matrix[role][category]
+                matrix[role][category] = (create, read, edit, delete, scope, fields)
+    return matrix
+
+
+def test_code_and_migrations_agree():
     """Розійдуться — і в базі буде одна матриця, а в тестах інша."""
-    assert _load_migration().MATRIX == DEFAULT_MATRIX
+    assert _matrix_from_migrations() == DEFAULT_MATRIX
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +167,9 @@ def test_operator_edits_only_masses():
     access = make_access(role=ROLE_OPERATOR)
 
     assert access.may_edit_field(CATEGORY_TRIPS, "bmass")
-    assert access.may_edit_field(CATEGORY_TRIPS, "nmass")
+    assert access.may_edit_field(CATEGORY_TRIPS, "tmass")
+    # Нетто не вводять — воно рахується з брутто й тари.
+    assert not access.may_edit_field(CATEGORY_TRIPS, "nmass")
     assert not access.may_edit_field(CATEGORY_TRIPS, "status")
     assert not access.may_edit_field(CATEGORY_TRIPS, "ttn")
 

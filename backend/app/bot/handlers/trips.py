@@ -50,7 +50,11 @@ from app.bot.handlers.common import menu_for
 from app.bot.keyboards import (
     MENU_TRIP_NEW,
     MENU_TRIPS,
+    TRIP_BACK,
     TRIP_CAL_PREFIX,
+    TRIP_CHOICE_PREFIX,
+    TRIP_CHOICES,
+    TRIP_CLEAR,
     TRIP_CLIENT_MANUAL,
     TRIP_CLIENT_PREFIX,
     TRIP_CONFIRM,
@@ -61,18 +65,25 @@ from app.bot.keyboards import (
     TRIP_EDIT_PREFIX,
     TRIP_EXPORTER_PREFIX,
     TRIP_FIELD_PREFIX,
+    TRIP_NOW,
+    TRIP_REDO,
+    TRIP_REDO_PREFIX,
     TRIP_SHOW_PREFIX,
     TRIP_STATUS_PREFIX,
     after_trip_keyboard,
     calendar_keyboard,
     cancel_keyboard,
     trip_card_keyboard,
+    trip_choice_keyboard,
     trip_client_keyboard,
     trip_confirm_keyboard,
+    trip_datetime_keyboard,
     trip_drivers_keyboard,
     trip_exporter_keyboard,
     trip_fields_keyboard,
+    trip_redo_keyboard,
     trip_status_keyboard,
+    trip_step_keyboard,
 )
 from app.bot.publisher import Publisher
 from app.bot.states import TripEdit, TripForm
@@ -110,7 +121,9 @@ TRIP_FIELDS: dict[str, tuple[str, str, str]] = {
     "departure": ("datetime_departure", "Виїзд", "datetime"),
     "bmass": ("b_mass", "Брутто", "mass"),
     "tmass": ("t_mass", "Тара", "mass"),
-    "nmass": ("n_mass", "Нетто", "mass"),
+    # «Нетто» тут немає навмисно: воно рахується з брутто й тари. Окреме поле
+    # дозволяло б зберегти брутто 20000, тару 25000 і нетто 3 — три числа,
+    # які не складаються в жодну вагу.
     "status": ("status", "Статус", "status"),
 }
 
@@ -119,7 +132,7 @@ PROMPTS = {
     "text": "Нове значення:",
     "plate": "Новий державний номер:",
     "phone": "Новий номер телефону:",
-    "datetime": "Формат «РРРР-ММ-ДД ГГ:ХХ». Надішліть «-», щоб очистити:",
+    "datetime": "Кнопкою нижче або текстом у форматі «РРРР-ММ-ДД ГГ:ХХ»:",
     "mass": "Маса в кілограмах, ціле число:",
 }
 
@@ -197,153 +210,85 @@ def _actor_id(access: Access) -> int | None:
     return access.employee.id if access.employee is not None else None
 
 
+def _choice(callback_data: str | None, kind: str) -> str | None:
+    """«trip:pick:<вид>:<номер>» → значення з переліку, або None."""
+    parts = (callback_data or "").split(":")
+    if len(parts) != 4 or parts[2] != kind or not parts[3].isdigit():
+        return None
+    options = TRIP_CHOICES.get(kind, ())
+    index = int(parts[3])
+    return options[index] if index < len(options) else None
+
+
+def _masses(trip: Trip, column: str, value: int) -> tuple[dict, str | None]:
+    """Значення для збереження — брутто, тара й порахуване з них нетто.
+
+    Нетто ніхто не вводить: воно похідне, і поки його зберігали окремо, ніщо
+    не заважало трьом числам не складатись. Порівнюємо лише коли задані
+    обидва: до зважування тара може стояти без брутто.
+    """
+    gross = value if column == "b_mass" else trip.b_mass
+    tare = value if column == "t_mass" else trip.t_mass
+    if gross and tare and tare > gross:
+        return {}, "Тара більша за брутто — перевірте, будь ласка, числа."
+    return {column: value, "n_mass": max(gross - tare, 0)}, None
+
+
 # ---------------------------------------------------------------------------
 # Створення
 # ---------------------------------------------------------------------------
+#
+# Кожен крок анкети розділений надвоє: `_ask_*` питає, `step_*` зберігає.
+# Розділення потрібне не заради симетрії: маючи «запитати» окремою функцією,
+# той самий крок можна відкрити повторно — кнопкою «⬅️ Назад» або з екрана
+# підтвердження, — не переписуючи ні текст питання, ні клавіатуру.
+#
+# Усі `_ask_*` мають однакову сигнатуру, навіть коли сесія комусь не потрібна:
+# інакше таблиця переходів розпалась би на окремі гілки за кількістю аргументів.
 
 
-@router.callback_query(F.data == MENU_TRIP_NEW)
-async def on_new_trip(
-    callback: CallbackQuery, state: FSMContext, access: Access
-) -> None:
-    if await deny(callback, access, CATEGORY_TRIPS, CREATE):
-        return
-    employee = access.employee
-    if employee is None or employee.id is None or employee.company_id is None:
-        await callback.answer()
-        if callback.message is not None:
-            await callback.message.answer(NEEDS_EMPLOYEE, reply_markup=menu_for(access))
-        return
-
-    await state.clear()
-    # Замовника й логіста фіксуємо одразу: вони не залежать від подальших
-    # кроків, і так їх неможливо переписати нічим, що прийде від користувача.
-    await state.update_data(
-        owner_company_id=employee.company_id,
-        created_by=employee.id,
-        logist_fullname=employee.fullname,
-        logist_phone_number=employee.phone_number,
-        logist_tg=employee.tg_id,
-    )
+async def _ask_ttn(message: Message, state: FSMContext, session: AsyncSession) -> None:
     await state.set_state(TripForm.ttn)
-    await callback.answer()
-    if callback.message is not None:
-        await callback.message.answer("Номер ТТН:", reply_markup=cancel_keyboard())
+    # Перший крок — повертатись нікуди, тож і кнопки «Назад» тут немає.
+    await message.answer("Номер ТТН:", reply_markup=cancel_keyboard())
 
 
-@router.message(TripForm.ttn, F.text)
-async def step_ttn(message: Message, state: FSMContext) -> None:
-    value = (message.text or "").strip()
-    if not 1 <= len(value) <= MAX_TTN:
-        await message.answer(
-            f"Номер ТТН має бути від 1 до {MAX_TTN} символів.",
-            reply_markup=cancel_keyboard(),
-        )
-        return
-    await state.update_data(ttn_num=value)
+async def _ask_arrival_date(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
     await state.set_state(TripForm.arrival_date)
     today = date.today()
     await message.answer(
         "Дата прибуття автомобіля:",
-        reply_markup=calendar_keyboard(today.year, today.month),
+        reply_markup=calendar_keyboard(today.year, today.month, back=True),
     )
-
-
-@router.callback_query(F.data.startswith(f"{TRIP_CAL_PREFIX}:"))
-async def on_calendar_nav(callback: CallbackQuery) -> None:
-    """Гортання місяців. Без фільтра стану: календар той самий і при
-    створенні рейсу, і при зміні дати в готовому."""
-    parts = (callback.data or "").split(":")
-    if len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit():
-        await callback.answer("Не вдалося погортати", show_alert=True)
-        return
-    year, month = int(parts[2]), int(parts[3])
-    if not (MIN_YEAR <= year <= MAX_YEAR and 1 <= month <= 12):
-        await callback.answer("Дата поза межами", show_alert=True)
-        return
-
-    await callback.answer()
-    if callback.message is not None:
-        await callback.message.edit_reply_markup(
-            reply_markup=calendar_keyboard(year, month)
-        )
-
-
-def _parse_date(callback_data: str | None) -> str | None:
-    """«trip:date:РРРР-ММ-ДД» → рядок дати або None, якщо це не дата."""
-    raw = (callback_data or "").split(":", 2)
-    if len(raw) != 3:
-        return None
-    try:
-        return datetime.strptime(raw[2], DATE_FORMAT).strftime(DATE_FORMAT)
-    except ValueError:
-        return None
 
 
 async def _ask_client(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
-    """Замовника більше не беремо з того, хто заповнює: рейс возять для
-    чужої компанії, і його компанія тут ні до чого."""
+    """Замовника не беремо з того, хто заповнює: рейс возять для чужої
+    компанії, і його власна компанія тут ні до чого."""
     await state.set_state(TripForm.client)
     companies = await repository.list_companies(session)
     await message.answer(
-        "Компанія-замовник:", reply_markup=trip_client_keyboard(companies)
+        "Компанія-замовник:", reply_markup=trip_client_keyboard(companies, back=True)
     )
 
 
-@router.callback_query(TripForm.client, F.data == TRIP_CLIENT_MANUAL)
-async def step_client_manual(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(client_company_id=None)
-    await state.set_state(TripForm.client_name)
-    await callback.answer()
-    if callback.message is not None:
-        await callback.message.answer(
-            "Назва компанії-замовника:", reply_markup=cancel_keyboard()
-        )
-
-
-@router.callback_query(TripForm.client, F.data.startswith(f"{TRIP_CLIENT_PREFIX}:"))
-async def step_client_pick(
-    callback: CallbackQuery, state: FSMContext, session: AsyncSession
-) -> None:
-    raw_id = (callback.data or "").rsplit(":", 1)[-1]
-    company = (
-        await repository.get_company(session, int(raw_id)) if raw_id.isdigit() else None
-    )
-    if company is None:
-        await callback.answer("Невідома компанія", show_alert=True)
-        return
-
-    # Назву копіюємо в рейс і при виборі зі списку: рейс — документ, і він
-    # має лишитись читабельним, якщо компанію потім перейменують.
-    await state.update_data(
-        client_company_id=company.id,
-        client_company_name=company_label(company),
-    )
-    await callback.answer()
-    if callback.message is not None:
-        await _ask_exporter(callback.message, state, session, TripForm.exporter)
-
-
-@router.message(TripForm.client_name, F.text)
-async def step_client_name(
+async def _ask_client_name(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
-    value = (message.text or "").strip()
-    if not 2 <= len(value) <= MAX_COMPANY_NAME:
-        await message.answer(
-            f"Назва має бути від 2 до {MAX_COMPANY_NAME} символів.",
-            reply_markup=cancel_keyboard(),
-        )
-        return
-    await state.update_data(client_company_name=value)
-    await _ask_exporter(message, state, session, TripForm.exporter)
+    await state.set_state(TripForm.client_name)
+    await message.answer(
+        "Назва компанії-замовника:", reply_markup=trip_step_keyboard()
+    )
 
 
 async def _ask_exporter(
     message: Message, state: FSMContext, session: AsyncSession, next_state
 ) -> bool:
+    """False — коли компаній немає взагалі й крок нема чим заповнити."""
     companies = await repository.list_companies(session)
     if not companies:
         await state.clear()
@@ -351,140 +296,70 @@ async def _ask_exporter(
         return False
     await state.set_state(next_state)
     await message.answer(
-        "Компанія-експортер:", reply_markup=trip_exporter_keyboard(companies)
+        "Компанія-експортер:",
+        reply_markup=trip_exporter_keyboard(
+            companies, back=next_state == TripForm.exporter
+        ),
     )
     return True
 
 
-@router.callback_query(TripForm.arrival_date, F.data.startswith(f"{TRIP_DATE_PREFIX}:"))
-async def step_arrival_date(
-    callback: CallbackQuery, state: FSMContext, session: AsyncSession
-) -> None:
-    value = _parse_date(callback.data)
-    if value is None:
-        await callback.answer("Невідома дата", show_alert=True)
-        return
-    await state.update_data(arrival_date=value)
-    await callback.answer()
-    if callback.message is not None:
-        await _ask_client(callback.message, state, session)
-
-
-@router.callback_query(TripForm.exporter, F.data.startswith(f"{TRIP_EXPORTER_PREFIX}:"))
-async def step_exporter(
-    callback: CallbackQuery, state: FSMContext, session: AsyncSession
-) -> None:
-    raw_id = (callback.data or "").rsplit(":", 1)[-1]
-    company = (
-        await repository.get_company(session, int(raw_id)) if raw_id.isdigit() else None
-    )
-    if company is None:
-        await callback.answer("Невідома компанія", show_alert=True)
-        return
-
-    await state.update_data(exporter_company_id=company.id)
-    await state.set_state(TripForm.truck)
-    await callback.answer()
-    if callback.message is not None:
-        await callback.message.answer(
-            "Тягач — марка й модель:", reply_markup=cancel_keyboard()
-        )
-
-
-def _short_text(value: str) -> str | None:
-    """Помилка або None. Спільна перевірка коротких текстових полів рейсу."""
-    if not 1 <= len(value) <= MAX_TRIP_TEXT:
-        return f"Значення має бути від 1 до {MAX_TRIP_TEXT} символів."
-    return None
-
-
-@router.message(TripForm.truck, F.text)
-async def step_truck(message: Message, state: FSMContext) -> None:
-    value = (message.text or "").strip()
-    if error := _short_text(value):
-        await message.answer(error, reply_markup=cancel_keyboard())
-        return
-    await state.update_data(truck=value)
-    await state.set_state(TripForm.truck_plate)
-    await message.answer("Державний номер тягача:", reply_markup=cancel_keyboard())
-
-
-def _plate(value: str) -> tuple[str, str | None]:
-    """(нормалізований номер, помилка). Номери зводимо до верхнього регістру,
-    щоб «аа1111аа» і «AA1111AA» не рахувались різними."""
-    normalized = value.strip().upper()
-    if not MIN_LICENSE_PLATE <= len(normalized) <= MAX_LICENSE_PLATE:
-        return normalized, (
-            f"Номер має бути від {MIN_LICENSE_PLATE} до {MAX_LICENSE_PLATE} символів."
-        )
-    return normalized, None
-
-
-@router.message(TripForm.truck_plate, F.text)
-async def step_truck_plate(message: Message, state: FSMContext) -> None:
-    value, error = _plate(message.text or "")
-    if error:
-        await message.answer(error, reply_markup=cancel_keyboard())
-        return
-    await state.update_data(truck_license_plate=value)
-    await state.set_state(TripForm.trailer)
-    await message.answer("Причіп — марка й модель:", reply_markup=cancel_keyboard())
-
-
-@router.message(TripForm.trailer, F.text)
-async def step_trailer(message: Message, state: FSMContext) -> None:
-    value = (message.text or "").strip()
-    if error := _short_text(value):
-        await message.answer(error, reply_markup=cancel_keyboard())
-        return
-    await state.update_data(trailer=value)
-    await state.set_state(TripForm.trailer_type)
-    await message.answer(
-        "Тип причепа (зерновоз, самоскид тощо):", reply_markup=cancel_keyboard()
-    )
-
-
-@router.message(TripForm.trailer_type, F.text)
-async def step_trailer_type(message: Message, state: FSMContext) -> None:
-    value = (message.text or "").strip()
-    if error := _short_text(value):
-        await message.answer(error, reply_markup=cancel_keyboard())
-        return
-    await state.update_data(trailer_type=value)
-    await state.set_state(TripForm.trailer_plate)
-    await message.answer("Державний номер причепа:", reply_markup=cancel_keyboard())
-
-
-@router.message(TripForm.trailer_plate, F.text)
-async def step_trailer_plate(message: Message, state: FSMContext) -> None:
-    value, error = _plate(message.text or "")
-    if error:
-        await message.answer(error, reply_markup=cancel_keyboard())
-        return
-
-    data = await state.get_data()
-    if value == data.get("truck_license_plate"):
-        await message.answer(
-            "Номери тягача й причепа не можуть збігатися. Введіть інший.",
-            reply_markup=cancel_keyboard(),
-        )
-        return
-
-    await state.update_data(trailer_license_plate=value)
-    await state.set_state(TripForm.grain)
-    await message.answer("Культура:", reply_markup=cancel_keyboard())
-
-
-@router.message(TripForm.grain, F.text)
-async def step_grain(
+async def _ask_trip_exporter(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
-    value = (message.text or "").strip()
-    if error := _short_text(value):
-        await message.answer(error, reply_markup=cancel_keyboard())
-        return
-    await state.update_data(grain_type=value)
-    await _ask_driver(message, state, session)
+    await _ask_exporter(message, state, session, TripForm.exporter)
+
+
+async def _ask_truck(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.truck)
+    await message.answer("Тягач — марка й модель:", reply_markup=trip_step_keyboard())
+
+
+async def _ask_truck_plate(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.truck_plate)
+    await message.answer(
+        "Державний номер тягача:", reply_markup=trip_step_keyboard()
+    )
+
+
+async def _ask_trailer(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.trailer)
+    await message.answer("Причіп — марка й модель:", reply_markup=trip_step_keyboard())
+
+
+async def _ask_trailer_type(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.trailer_type)
+    await message.answer(
+        "Тип причепа — оберіть або введіть свій:",
+        reply_markup=trip_choice_keyboard("ttype", back=True),
+    )
+
+
+async def _ask_trailer_plate(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.trailer_plate)
+    await message.answer(
+        "Державний номер причепа:", reply_markup=trip_step_keyboard()
+    )
+
+
+async def _ask_grain(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.grain)
+    await message.answer(
+        "Культура — оберіть або введіть свою:",
+        reply_markup=trip_choice_keyboard("grain", back=True),
+    )
 
 
 async def _driver_candidates(
@@ -514,17 +389,425 @@ async def _ask_driver(
     await message.answer(
         "Оберіть водія:" if candidates
         else "У компанії немає інших зареєстрованих співробітників.",
-        reply_markup=trip_drivers_keyboard(candidates),
+        reply_markup=trip_drivers_keyboard(candidates, back=True),
     )
 
 
-@router.callback_query(TripForm.driver, F.data == TRIP_DRIVER_MANUAL)
-async def step_driver_manual(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(driver_id=None)
+async def _ask_driver_name(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
     await state.set_state(TripForm.driver_name)
+    await message.answer("ПІБ водія:", reply_markup=trip_step_keyboard())
+
+
+async def _ask_driver_phone(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.driver_phone)
+    await message.answer("Телефон водія:", reply_markup=trip_step_keyboard())
+
+
+#: Стан → крок, на який веде «⬅️ Назад». Таблиця явна, а не арифметика по
+#: індексу: анкета розгалужується (замовник зі списку чи руками, водій зі
+#: складу чи сторонній), і «попередній» там не означає «на одиницю менший».
+BACK_TO = {
+    TripForm.arrival_date.state: _ask_ttn,
+    TripForm.client.state: _ask_arrival_date,
+    TripForm.client_name.state: _ask_client,
+    TripForm.exporter.state: _ask_client,
+    TripForm.truck.state: _ask_trip_exporter,
+    TripForm.truck_plate.state: _ask_truck,
+    TripForm.trailer.state: _ask_truck_plate,
+    TripForm.trailer_type.state: _ask_trailer,
+    TripForm.trailer_plate.state: _ask_trailer_type,
+    TripForm.grain.state: _ask_trailer_plate,
+    TripForm.driver.state: _ask_grain,
+    TripForm.driver_name.state: _ask_driver,
+    TripForm.driver_phone.state: _ask_driver_name,
+}
+
+#: Що можна переробити з екрана підтвердження: ключ → (підпис, крок).
+#: Ключі ті самі, що й у TRIP_FIELDS, — щоб одне поле не звалось у двох
+#: місцях по-різному.
+REDO_STEPS = {
+    "ttn": ("Номер ТТН", _ask_ttn),
+    "date": ("Дата прибуття", _ask_arrival_date),
+    "client": ("Замовник", _ask_client),
+    "exp": ("Експортер", _ask_trip_exporter),
+    "truck": ("Тягач", _ask_truck),
+    "tplate": ("Номер тягача", _ask_truck_plate),
+    "trailer": ("Причіп", _ask_trailer),
+    "ttype": ("Тип причепа", _ask_trailer_type),
+    "rplate": ("Номер причепа", _ask_trailer_plate),
+    "grain": ("Культура", _ask_grain),
+    "driver": ("Водій", _ask_driver),
+}
+
+
+async def _advance(
+    message: Message, state: FSMContext, session: AsyncSession, next_step
+) -> None:
+    """Куди йти після збереженого кроку.
+
+    Зазвичай — далі анкетою. Але якщо крок відкрили з екрана підтвердження,
+    вести людину рештою кроків заново означало б покарати її за одну описку.
+    """
+    data = await state.get_data()
+    if data.get("return_to_summary"):
+        await _show_summary(message, state, session)
+        return
+    await next_step(message, state, session)
+
+
+@router.callback_query(F.data == TRIP_BACK)
+async def on_form_back(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    """Один крок назад. Уже введене лишається в стані, тож повернення вперед
+    нічого не втрачає."""
+    step = BACK_TO.get(await state.get_state() or "")
+    if step is None:
+        await callback.answer("Повертатись нікуди", show_alert=True)
+        return
     await callback.answer()
     if callback.message is not None:
-        await callback.message.answer("ПІБ водія:", reply_markup=cancel_keyboard())
+        await step(callback.message, state, session)
+
+
+@router.callback_query(TripForm.confirm, F.data == TRIP_REDO)
+async def on_redo(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Що змінюємо?",
+            reply_markup=trip_redo_keyboard(
+                [(key, title) for key, (title, _) in REDO_STEPS.items()]
+            ),
+        )
+
+
+@router.callback_query(TripForm.confirm, F.data.startswith(f"{TRIP_REDO_PREFIX}:"))
+async def on_redo_step(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    key = (callback.data or "").rsplit(":", 1)[-1]
+    step = REDO_STEPS.get(key)
+    if step is None:
+        await callback.answer("Невідоме поле", show_alert=True)
+        return
+    # Прапорець живе до наступного збереженого кроку: саме він поверне
+    # людину на підсумок замість решти анкети.
+    await state.update_data(return_to_summary=True)
+    await callback.answer()
+    if callback.message is not None:
+        await step[1](callback.message, state, session)
+
+
+@router.callback_query(F.data == MENU_TRIP_NEW)
+async def on_new_trip(
+    callback: CallbackQuery, state: FSMContext, access: Access
+) -> None:
+    if await deny(callback, access, CATEGORY_TRIPS, CREATE):
+        return
+    employee = access.employee
+    if employee is None or employee.id is None or employee.company_id is None:
+        await callback.answer()
+        if callback.message is not None:
+            await callback.message.answer(NEEDS_EMPLOYEE, reply_markup=menu_for(access))
+        return
+
+    await state.clear()
+    # Компанію-власника й логіста фіксуємо одразу: вони не залежать від
+    # подальших кроків, і так їх неможливо переписати нічим, що прийде
+    # від користувача.
+    await state.update_data(
+        owner_company_id=employee.company_id,
+        created_by=employee.id,
+        logist_fullname=employee.fullname,
+        logist_phone_number=employee.phone_number,
+        logist_tg=employee.tg_id,
+    )
+    await state.set_state(TripForm.ttn)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer("Номер ТТН:", reply_markup=cancel_keyboard())
+
+
+@router.message(TripForm.ttn, F.text)
+async def step_ttn(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if not 1 <= len(value) <= MAX_TTN:
+        await message.answer(
+            f"Номер ТТН має бути від 1 до {MAX_TTN} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await state.update_data(ttn_num=value)
+    await _advance(message, state, session, _ask_arrival_date)
+
+
+@router.callback_query(F.data.startswith(f"{TRIP_CAL_PREFIX}:"))
+async def on_calendar_nav(callback: CallbackQuery, state: FSMContext) -> None:
+    """Гортання місяців. Без фільтра стану: календар той самий і при
+    створенні рейсу, і при зміні дати в готовому. Кнопку «Назад» лишаємо
+    тільки в анкеті — у картці повертатись нікуди."""
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit():
+        await callback.answer("Не вдалося погортати", show_alert=True)
+        return
+    year, month = int(parts[2]), int(parts[3])
+    if not (MIN_YEAR <= year <= MAX_YEAR and 1 <= month <= 12):
+        await callback.answer("Дата поза межами", show_alert=True)
+        return
+
+    in_form = await state.get_state() == TripForm.arrival_date.state
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.edit_reply_markup(
+            reply_markup=calendar_keyboard(year, month, back=in_form)
+        )
+
+
+def _parse_date(callback_data: str | None) -> str | None:
+    """«trip:date:РРРР-ММ-ДД» → рядок дати або None, якщо це не дата."""
+    raw = (callback_data or "").split(":", 2)
+    if len(raw) != 3:
+        return None
+    try:
+        return datetime.strptime(raw[2], DATE_FORMAT).strftime(DATE_FORMAT)
+    except ValueError:
+        return None
+
+
+@router.callback_query(TripForm.arrival_date, F.data.startswith(f"{TRIP_DATE_PREFIX}:"))
+async def step_arrival_date(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    value = _parse_date(callback.data)
+    if value is None:
+        await callback.answer("Невідома дата", show_alert=True)
+        return
+    await state.update_data(arrival_date=value)
+    await callback.answer()
+    if callback.message is not None:
+        await _advance(callback.message, state, session, _ask_client)
+
+
+@router.callback_query(TripForm.client, F.data == TRIP_CLIENT_MANUAL)
+async def step_client_manual(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    """Ручний ввід — не наступний крок, а друга половина цього: підсумок
+    чекає на назву, а не на порожнє поле."""
+    await state.update_data(client_company_id=None)
+    await callback.answer()
+    if callback.message is not None:
+        await _ask_client_name(callback.message, state, session)
+
+
+@router.callback_query(TripForm.client, F.data.startswith(f"{TRIP_CLIENT_PREFIX}:"))
+async def step_client_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    company = (
+        await repository.get_company(session, int(raw_id)) if raw_id.isdigit() else None
+    )
+    if company is None:
+        await callback.answer("Невідома компанія", show_alert=True)
+        return
+
+    # Назву копіюємо в рейс і при виборі зі списку: рейс — документ, і він
+    # має лишитись читабельним, якщо компанію потім перейменують.
+    await state.update_data(
+        client_company_id=company.id,
+        client_company_name=company_label(company),
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await _advance(callback.message, state, session, _ask_trip_exporter)
+
+
+@router.message(TripForm.client_name, F.text)
+async def step_client_name(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if not 2 <= len(value) <= MAX_COMPANY_NAME:
+        await message.answer(
+            f"Назва має бути від 2 до {MAX_COMPANY_NAME} символів.",
+            reply_markup=trip_step_keyboard(),
+        )
+        return
+    await state.update_data(client_company_name=value)
+    await _advance(message, state, session, _ask_trip_exporter)
+
+
+@router.callback_query(TripForm.exporter, F.data.startswith(f"{TRIP_EXPORTER_PREFIX}:"))
+async def step_exporter(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    company = (
+        await repository.get_company(session, int(raw_id)) if raw_id.isdigit() else None
+    )
+    if company is None:
+        await callback.answer("Невідома компанія", show_alert=True)
+        return
+
+    await state.update_data(exporter_company_id=company.id)
+    await callback.answer()
+    if callback.message is not None:
+        await _advance(callback.message, state, session, _ask_truck)
+
+
+def _short_text(value: str) -> str | None:
+    """Помилка або None. Спільна перевірка коротких текстових полів рейсу."""
+    if not 1 <= len(value) <= MAX_TRIP_TEXT:
+        return f"Значення має бути від 1 до {MAX_TRIP_TEXT} символів."
+    return None
+
+
+@router.message(TripForm.truck, F.text)
+async def step_truck(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if error := _short_text(value):
+        await message.answer(error, reply_markup=trip_step_keyboard())
+        return
+    await state.update_data(truck=value)
+    await _advance(message, state, session, _ask_truck_plate)
+
+
+def _plate(value: str) -> tuple[str, str | None]:
+    """(нормалізований номер, помилка). Номери зводимо до верхнього регістру,
+    щоб «аа1111аа» і «AA1111AA» не рахувались різними."""
+    normalized = value.strip().upper()
+    if not MIN_LICENSE_PLATE <= len(normalized) <= MAX_LICENSE_PLATE:
+        return normalized, (
+            f"Номер має бути від {MIN_LICENSE_PLATE} до {MAX_LICENSE_PLATE} символів."
+        )
+    return normalized, None
+
+
+@router.message(TripForm.truck_plate, F.text)
+async def step_truck_plate(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value, error = _plate(message.text or "")
+    if error:
+        await message.answer(error, reply_markup=trip_step_keyboard())
+        return
+    await state.update_data(truck_license_plate=value)
+    await _advance(message, state, session, _ask_trailer)
+
+
+@router.message(TripForm.trailer, F.text)
+async def step_trailer(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if error := _short_text(value):
+        await message.answer(error, reply_markup=trip_step_keyboard())
+        return
+    await state.update_data(trailer=value)
+    await _advance(message, state, session, _ask_trailer_type)
+
+
+@router.callback_query(
+    TripForm.trailer_type, F.data.startswith(f"{TRIP_CHOICE_PREFIX}:")
+)
+async def step_trailer_type_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    value = _choice(callback.data, "ttype")
+    if value is None:
+        await callback.answer("Невідоме значення", show_alert=True)
+        return
+    await state.update_data(trailer_type=value)
+    await callback.answer()
+    if callback.message is not None:
+        await _advance(callback.message, state, session, _ask_trailer_plate)
+
+
+@router.message(TripForm.trailer_type, F.text)
+async def step_trailer_type(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    """Кнопки — підказка, а не обмеження: типів причепів більше, ніж
+    поміститься в перелік, тож набраний текст приймається так само."""
+    value = (message.text or "").strip()
+    if error := _short_text(value):
+        await message.answer(
+            error, reply_markup=trip_choice_keyboard("ttype", back=True)
+        )
+        return
+    await state.update_data(trailer_type=value)
+    await _advance(message, state, session, _ask_trailer_plate)
+
+
+@router.message(TripForm.trailer_plate, F.text)
+async def step_trailer_plate(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value, error = _plate(message.text or "")
+    if error:
+        await message.answer(error, reply_markup=trip_step_keyboard())
+        return
+
+    data = await state.get_data()
+    if value == data.get("truck_license_plate"):
+        await message.answer(
+            "Номери тягача й причепа не можуть збігатися. Введіть інший.",
+            reply_markup=trip_step_keyboard(),
+        )
+        return
+
+    await state.update_data(trailer_license_plate=value)
+    await _advance(message, state, session, _ask_grain)
+
+
+@router.callback_query(TripForm.grain, F.data.startswith(f"{TRIP_CHOICE_PREFIX}:"))
+async def step_grain_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    value = _choice(callback.data, "grain")
+    if value is None:
+        await callback.answer("Невідоме значення", show_alert=True)
+        return
+    await state.update_data(grain_type=value)
+    await callback.answer()
+    if callback.message is not None:
+        await _advance(callback.message, state, session, _ask_driver)
+
+
+@router.message(TripForm.grain, F.text)
+async def step_grain(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    """Кнопки — підказка, а не обмеження: культур більше, ніж шість, і сорт
+    або клас усе одно дописують руками."""
+    value = (message.text or "").strip()
+    if error := _short_text(value):
+        await message.answer(
+            error, reply_markup=trip_choice_keyboard("grain", back=True)
+        )
+        return
+    await state.update_data(grain_type=value)
+    await _advance(message, state, session, _ask_driver)
+
+
+@router.callback_query(TripForm.driver, F.data == TRIP_DRIVER_MANUAL)
+async def step_driver_manual(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.update_data(driver_id=None)
+    await callback.answer()
+    if callback.message is not None:
+        await _ask_driver_name(callback.message, state, session)
 
 
 @router.callback_query(TripForm.driver, F.data.startswith(f"{TRIP_DRIVER_PREFIX}:"))
@@ -555,14 +838,15 @@ async def step_driver_pick(
 
 
 @router.message(TripForm.driver_name, F.text)
-async def step_driver_name(message: Message, state: FSMContext) -> None:
+async def step_driver_name(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
     value = (message.text or "").strip()
     if error := _short_text(value):
-        await message.answer(error, reply_markup=cancel_keyboard())
+        await message.answer(error, reply_markup=trip_step_keyboard())
         return
     await state.update_data(driver_fullname=value)
-    await state.set_state(TripForm.driver_phone)
-    await message.answer("Телефон водія:", reply_markup=cancel_keyboard())
+    await _ask_driver_phone(message, state, session)
 
 
 @router.message(TripForm.driver_phone, F.text)
@@ -573,7 +857,7 @@ async def step_driver_phone(
     if not MIN_PHONE <= len(value) <= MAX_PHONE:
         await message.answer(
             f"Номер має бути від {MIN_PHONE} до {MAX_PHONE} символів.",
-            reply_markup=cancel_keyboard(),
+            reply_markup=trip_step_keyboard(),
         )
         return
 
@@ -585,6 +869,9 @@ async def _show_summary(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
     await state.set_state(TripForm.confirm)
+    # Прапорець спрацював і згорів: наступний крок, відкритий уже не з
+    # підсумку, має вести анкетою далі.
+    await state.update_data(return_to_summary=False)
     data = await state.get_data()
 
     exporter = await repository.get_company(session, data["exporter_company_id"])
@@ -840,8 +1127,16 @@ async def on_trip_field(
         return
 
     await state.set_state(TripEdit.value)
+    # Клавіатура за полем: час відмічають «зараз», культуру й тип причепа
+    # частіше обирають, ніж набирають. Ручний ввід лишається в усіх трьох.
+    if kind == "datetime":
+        keyboard = trip_datetime_keyboard()
+    elif key in TRIP_CHOICES:
+        keyboard = trip_choice_keyboard(key)
+    else:
+        keyboard = cancel_keyboard()
     await callback.message.answer(
-        f"<b>{escape(title)}</b>\n{PROMPTS[kind]}", reply_markup=cancel_keyboard()
+        f"<b>{escape(title)}</b>\n{PROMPTS[kind]}", reply_markup=keyboard
     )
 
 
@@ -1005,9 +1300,88 @@ async def edit_value(
     if error:
         await message.answer(error, reply_markup=cancel_keyboard())
         return
+
+    values = {column: value}
+    if kind == "mass":
+        values, error = _masses(trip, column, value)
+        if error:
+            await message.answer(error, reply_markup=cancel_keyboard())
+            return
+
     await _apply(
-        message, state, session, access, publisher, trip,
+        message, state, session, access, publisher, trip, field=key, **values
+    )
+
+
+@router.callback_query(TripEdit.value, F.data.startswith(f"{TRIP_CHOICE_PREFIX}:"))
+async def edit_choice(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    access: Access,
+    publisher: Publisher,
+) -> None:
+    """Культура або тип причепа, обрані кнопкою. Ключ підказки збігається з
+    ключем поля, тож окремої відповідності тримати не треба."""
+    data = await state.get_data()
+    key = data.get("field", "")
+    value = _choice(callback.data, key)
+    if value is None:
+        await callback.answer("Невідоме значення", show_alert=True)
+        return
+    if not access.may_edit_field(CATEGORY_TRIPS, key):
+        await callback.answer(DENIED, show_alert=True)
+        return
+
+    await callback.answer()
+    if callback.message is None:
+        return
+    trip = await _editable_trip(callback.message, state, session, access)
+    if trip is None:
+        return
+    column = TRIP_FIELDS[key][0]
+    await _apply(
+        callback.message, state, session, access, publisher, trip,
         field=key, **{column: value},
+    )
+
+
+@router.callback_query(TripEdit.value, F.data.in_({TRIP_NOW, TRIP_CLEAR}))
+async def edit_datetime_button(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    access: Access,
+    publisher: Publisher,
+) -> None:
+    """Заїзд і виїзд однією кнопкою.
+
+    Місцевий час, а не UTC: так задано в моделі для цих двох колонок — їх
+    читає людина на вагах, і зсув зробив би час незрозумілим.
+    """
+    data = await state.get_data()
+    key = data.get("field", "")
+    field = TRIP_FIELDS.get(key)
+    if field is None or field[2] != "datetime":
+        await callback.answer("Не зрозуміло, що саме редагуємо", show_alert=True)
+        return
+    if not access.may_edit_field(CATEGORY_TRIPS, key):
+        await callback.answer(DENIED, show_alert=True)
+        return
+
+    await callback.answer()
+    if callback.message is None:
+        return
+    trip = await _editable_trip(callback.message, state, session, access)
+    if trip is None:
+        return
+
+    value = None if callback.data == TRIP_CLEAR else datetime.now().strftime(
+        DATETIME_FORMAT
+    )
+    await _apply(
+        callback.message, state, session, access, publisher, trip,
+        field=key, **{field[0]: value},
     )
 
 

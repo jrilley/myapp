@@ -14,7 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # робочими, поки код заявок живий.
 from app.bot import constants
 from app.bot.access import CREATE, DELETE, EDIT, READ
-from app.bot.constants import CATEGORIES
+from app.bot.constants import CATEGORIES, GRAIN_TYPES, TRAILER_TYPES
 from app.models import (
     CATEGORY_COMPANY,
     CATEGORY_EMPLOYEES,
@@ -64,6 +64,16 @@ TRIP_CLIENT_PREFIX = "trip:cli"
 TRIP_CLIENT_MANUAL = "trip:cli:manual"
 #: Статус: trip:st:<номер у TRIP_STATUSES>.
 TRIP_STATUS_PREFIX = "trip:st"
+#: Підказка зі списку: trip:pick:<grain|ttype>:<номер у переліку>.
+TRIP_CHOICE_PREFIX = "trip:pick"
+#: Час заїзду/виїзду: поточний момент або очистити поле.
+TRIP_NOW = "trip:now"
+TRIP_CLEAR = "trip:clear"
+#: Один крок анкети назад.
+TRIP_BACK = "trip:back"
+#: Правка з екрана підтвердження: список полів і перехід на конкретне.
+TRIP_REDO = "trip:redo"
+TRIP_REDO_PREFIX = "trip:redoto"
 TRIP_CONFIRM = "trip:confirm"
 TRIP_SHOW_PREFIX = "trip:show"
 TRIP_EDIT_PREFIX = "trip:edit"
@@ -624,6 +634,41 @@ MONTHS = (
 WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд")
 
 
+def _step_row(builder: InlineKeyboardBuilder, *, back: bool) -> None:
+    """Нижній рядок кроку анкети.
+
+    «⬅️ Назад» додається лише там, куди справді є куди повертатись: ті самі
+    клавіатури (календар, вибір компанії) використовуються і при редагуванні
+    готового рейсу, а там кнопка вела б у нікуди.
+    """
+    buttons = [InlineKeyboardButton(text="✖️ Скасувати", callback_data=FORM_CANCEL)]
+    if back:
+        buttons.insert(
+            0, InlineKeyboardButton(text="⬅️ Назад", callback_data=TRIP_BACK)
+        )
+    builder.row(*buttons)
+
+
+def trip_step_keyboard() -> InlineKeyboardMarkup:
+    """Крок анкети, який заповнюють текстом."""
+    builder = InlineKeyboardBuilder()
+    _step_row(builder, back=True)
+    return builder.as_markup()
+
+
+def trip_redo_keyboard(fields) -> InlineKeyboardMarkup:
+    """Що переробити перед створенням. Раніше описка на третьому кроці з
+    чотирнадцяти означала пройти анкету заново."""
+    builder = InlineKeyboardBuilder()
+    for key, title in fields:
+        builder.button(text=title, callback_data=f"{TRIP_REDO_PREFIX}:{key}")
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    )
+    return builder.as_markup()
+
+
 def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
     """Сусідній місяць. Рахуємо в «місяцях від нуля», щоб грудень→січень
     переносив рік сам, без окремої гілки."""
@@ -631,7 +676,9 @@ def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
     return index // 12, index % 12 + 1
 
 
-def calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
+def calendar_keyboard(
+    year: int, month: int, *, back: bool = False
+) -> InlineKeyboardMarkup:
     """Календар на місяць: дату обирають натисканням, а не набирають.
 
     Порожні клітинки — теж кнопки: Telegram не дозволяє пропуски в рядку,
@@ -666,13 +713,11 @@ def calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
             )
         )
 
-    builder.row(
-        InlineKeyboardButton(text="✖️ Скасувати", callback_data=FORM_CANCEL)
-    )
+    _step_row(builder, back=back)
     return builder.as_markup()
 
 
-def trip_client_keyboard(companies) -> InlineKeyboardMarkup:
+def trip_client_keyboard(companies, *, back: bool = False) -> InlineKeyboardMarkup:
     """Замовник: зі списку компаній або вручну. Ручний ввід потрібен завжди —
     замовник цілком може не бути в системі."""
     builder = InlineKeyboardBuilder()
@@ -682,12 +727,12 @@ def trip_client_keyboard(companies) -> InlineKeyboardMarkup:
             callback_data=f"{TRIP_CLIENT_PREFIX}:{company.id}",
         )
     builder.button(text="✍️ Ввести вручну", callback_data=TRIP_CLIENT_MANUAL)
-    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
     builder.adjust(1)
+    _step_row(builder, back=back)
     return builder.as_markup()
 
 
-def trip_exporter_keyboard(companies) -> InlineKeyboardMarkup:
+def trip_exporter_keyboard(companies, *, back: bool = False) -> InlineKeyboardMarkup:
     """Компанія-експортер: підпис — «назва - код», як і при виборі компанії
     для транспорту."""
     builder = InlineKeyboardBuilder()
@@ -696,12 +741,12 @@ def trip_exporter_keyboard(companies) -> InlineKeyboardMarkup:
             text=f"{company.name} - {company.tax_id}",
             callback_data=f"{TRIP_EXPORTER_PREFIX}:{company.id}",
         )
-    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
     builder.adjust(1)
+    _step_row(builder, back=back)
     return builder.as_markup()
 
 
-def trip_drivers_keyboard(employees) -> InlineKeyboardMarkup:
+def trip_drivers_keyboard(employees, *, back: bool = False) -> InlineKeyboardMarkup:
     """Водії — зі складу компанії. Ручний ввід лишається окремою кнопкою:
     рейс може виконувати найманий перевізник, якого в employees немає."""
     builder = InlineKeyboardBuilder()
@@ -711,8 +756,8 @@ def trip_drivers_keyboard(employees) -> InlineKeyboardMarkup:
             callback_data=f"{TRIP_DRIVER_PREFIX}:{employee.id}",
         )
     builder.button(text="✍️ Ввести вручну", callback_data=TRIP_DRIVER_MANUAL)
-    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
     builder.adjust(1)
+    _step_row(builder, back=back)
     return builder.as_markup()
 
 
@@ -733,9 +778,44 @@ def trip_status_keyboard(current: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+#: Ключ підказки → перелік значень. Ключ їде в callback_data, тож він
+#: короткий і латиницею; самі значення передаються номером.
+TRIP_CHOICES: dict[str, tuple[str, ...]] = {
+    "grain": GRAIN_TYPES,
+    "ttype": TRAILER_TYPES,
+}
+
+
+def trip_choice_keyboard(kind: str, *, back: bool = False) -> InlineKeyboardMarkup:
+    """Часті значення кнопками. Не довідник і не обмеження: поле лишається
+    текстовим, і будь-що поза переліком вводиться руками — просто набирати
+    «Пшениця» вп'ятнадцяте не обов'язково."""
+    builder = InlineKeyboardBuilder()
+    for index, value in enumerate(TRIP_CHOICES[kind]):
+        builder.button(
+            text=value, callback_data=f"{TRIP_CHOICE_PREFIX}:{kind}:{index}"
+        )
+    builder.adjust(2)
+    _step_row(builder, back=back)
+    return builder.as_markup()
+
+
+def trip_datetime_keyboard() -> InlineKeyboardMarkup:
+    """Заїзд і виїзд оператор відмічає в момент, коли вони стались, — тож
+    «зараз» покриває майже всі випадки, а набирати «2026-08-10 07:30» руками
+    доводиться хіба заднім числом."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🕐 Зараз", callback_data=TRIP_NOW)
+    builder.button(text="🧹 Очистити", callback_data=TRIP_CLEAR)
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+
 def trip_confirm_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Створити рейс", callback_data=TRIP_CONFIRM)
+    builder.button(text="✏️ Змінити", callback_data=TRIP_REDO)
     builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
     builder.adjust(1)
     return builder.as_markup()

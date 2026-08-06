@@ -31,9 +31,14 @@ from app.bot.handlers.trips import (
     edit_driver_manual,
     edit_driver_name,
     edit_driver_phone,
+    edit_choice,
+    edit_datetime_button,
     edit_driver_pick,
     edit_status,
     on_calendar_nav,
+    on_form_back,
+    on_redo,
+    on_redo_step,
     on_new_trip,
     on_trip_card,
     on_trip_delete,
@@ -52,9 +57,11 @@ from app.bot.handlers.trips import (
     step_driver_pick,
     step_exporter,
     step_grain,
+    step_grain_pick,
     step_trailer,
     step_trailer_plate,
     step_trailer_type,
+    step_trailer_type_pick,
     step_truck,
     step_truck_plate,
     step_ttn,
@@ -64,6 +71,8 @@ from app.bot.keyboards import (
     PAGE_PREFIX,
     PAGE_TRIPS,
     TRIP_CAL_PREFIX,
+    TRIP_CHOICE_PREFIX,
+    TRIP_CLEAR,
     TRIP_CLIENT_MANUAL,
     TRIP_CLIENT_PREFIX,
     TRIP_CONFIRM,
@@ -74,6 +83,10 @@ from app.bot.keyboards import (
     TRIP_EDIT_PREFIX,
     TRIP_EXPORTER_PREFIX,
     TRIP_FIELD_PREFIX,
+    TRIP_BACK,
+    TRIP_NOW,
+    TRIP_REDO,
+    TRIP_REDO_PREFIX,
     TRIP_SHOW_PREFIX,
     TRIP_STATUS_PREFIX,
 )
@@ -206,7 +219,7 @@ async def fill_form_until_driver(state, session, access, exporter_id, *, grain="
     """Анкета до кроку вибору водія. `grain=None` зупиняє перед культурою —
     щоб тест сам подав повідомлення й побачив список водіїв."""
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, access)
-    await step_ttn(FakeMessage("ТТН-000123"), state)
+    await step_ttn(FakeMessage("ТТН-000123"), state, session)
     await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
     await step_client_pick(
         FakeCallback(f"{TRIP_CLIENT_PREFIX}:{exporter_id}"), state, session
@@ -214,11 +227,11 @@ async def fill_form_until_driver(state, session, access, exporter_id, *, grain="
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
     )
-    await step_truck(FakeMessage("Volvo FH16"), state)
-    await step_truck_plate(FakeMessage("aa1111aa"), state)
-    await step_trailer(FakeMessage("Schmitz SKO24"), state)
-    await step_trailer_type(FakeMessage("зерновоз"), state)
-    await step_trailer_plate(FakeMessage("cc3333cc"), state)
+    await step_truck(FakeMessage("Volvo FH16"), state, session)
+    await step_truck_plate(FakeMessage("aa1111aa"), state, session)
+    await step_trailer(FakeMessage("Schmitz SKO24"), state, session)
+    await step_trailer_type(FakeMessage("зерновоз"), state, session)
+    await step_trailer_plate(FakeMessage("cc3333cc"), state, session)
     if grain is not None:
         await step_grain(FakeMessage(grain), state, session)
 
@@ -240,7 +253,7 @@ async def fill_form(state, session, access, **overrides):
     exporter_id = overrides.get("exporter_id")
 
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, access)
-    await step_ttn(FakeMessage(steps["ttn"]), state)
+    await step_ttn(FakeMessage(steps["ttn"]), state, session)
     await step_arrival_date(
         FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session
     )
@@ -251,17 +264,17 @@ async def fill_form(state, session, access, **overrides):
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
     )
-    await step_truck(FakeMessage(steps["truck"]), state)
-    await step_truck_plate(FakeMessage(steps["truck_plate"]), state)
-    await step_trailer(FakeMessage(steps["trailer"]), state)
-    await step_trailer_type(FakeMessage(steps["trailer_type"]), state)
-    await step_trailer_plate(FakeMessage(steps["trailer_plate"]), state)
+    await step_truck(FakeMessage(steps["truck"]), state, session)
+    await step_truck_plate(FakeMessage(steps["truck_plate"]), state, session)
+    await step_trailer(FakeMessage(steps["trailer"]), state, session)
+    await step_trailer_type(FakeMessage(steps["trailer_type"]), state, session)
+    await step_trailer_plate(FakeMessage(steps["trailer_plate"]), state, session)
     await step_grain(FakeMessage(steps["grain"]), state, session)
 
     driver_id = overrides.get("driver_id")
     if driver_id is None:
-        await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state)
-        await step_driver_name(FakeMessage(steps["driver"]), state)
+        await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state, session)
+        await step_driver_name(FakeMessage(steps["driver"]), state, session)
         await step_driver_phone(FakeMessage(steps["driver_phone"]), state, session)
     else:
         await step_driver_pick(
@@ -389,7 +402,7 @@ def test_callback_prefixes_do_not_shadow_each_other():
 
 async def test_trailer_plate_must_differ_from_the_truck(session, state, world, logist):
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
-    await step_ttn(FakeMessage("ТТН-2"), state)
+    await step_ttn(FakeMessage("ТТН-2"), state, session)
     await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
     await step_client_pick(
         FakeCallback(f"{TRIP_CLIENT_PREFIX}:{world.theirs.id}"), state, session
@@ -397,13 +410,13 @@ async def test_trailer_plate_must_differ_from_the_truck(session, state, world, l
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.theirs.id}"), state, session
     )
-    await step_truck(FakeMessage("Volvo"), state)
-    await step_truck_plate(FakeMessage("AA1111AA"), state)
-    await step_trailer(FakeMessage("Schmitz"), state)
-    await step_trailer_type(FakeMessage("зерновоз"), state)
+    await step_truck(FakeMessage("Volvo"), state, session)
+    await step_truck_plate(FakeMessage("AA1111AA"), state, session)
+    await step_trailer(FakeMessage("Schmitz"), state, session)
+    await step_trailer_type(FakeMessage("зерновоз"), state, session)
 
     message = FakeMessage("aa1111aa")  # той самий номер, іншим регістром
-    await step_trailer_plate(message, state)
+    await step_trailer_plate(message, state, session)
 
     assert await state.get_state() == TripForm.trailer_plate
     assert "не можуть збігатися" in message.answers[0]
@@ -411,7 +424,7 @@ async def test_trailer_plate_must_differ_from_the_truck(session, state, world, l
 
 async def test_unknown_date_is_rejected(session, state, world, logist):
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
-    await step_ttn(FakeMessage("ТТН-3"), state)
+    await step_ttn(FakeMessage("ТТН-3"), state, session)
     callback = FakeCallback(f"{TRIP_DATE_PREFIX}:2026-02-31")
 
     await step_arrival_date(callback, state, session)
@@ -634,18 +647,18 @@ async def test_delete_clears_the_chat_and_tells_the_driver(
 # ---------------------------------------------------------------------------
 
 
-async def test_calendar_navigation_rolls_over_the_year():
+async def test_calendar_navigation_rolls_over_the_year(state):
     callback = FakeCallback(f"{TRIP_CAL_PREFIX}:2026:12")
-    await on_calendar_nav(callback)
+    await on_calendar_nav(callback, state)
 
     # Кнопка «›» грудня має вести в січень наступного року.
     data = callback_data(callback.message.markups[0])
     assert f"{TRIP_CAL_PREFIX}:2027:1" in data
 
 
-async def test_calendar_days_carry_a_full_date():
+async def test_calendar_days_carry_a_full_date(state):
     callback = FakeCallback(f"{TRIP_CAL_PREFIX}:2026:8")
-    await on_calendar_nav(callback)
+    await on_calendar_nav(callback, state)
 
     data = callback_data(callback.message.markups[0])
     assert f"{TRIP_DATE_PREFIX}:2026-08-01" in data
@@ -653,10 +666,10 @@ async def test_calendar_days_carry_a_full_date():
     assert f"{TRIP_DATE_PREFIX}:2026-08-32" not in data
 
 
-async def test_calendar_rejects_a_forged_month():
+async def test_calendar_rejects_a_forged_month(state):
     callback = FakeCallback(f"{TRIP_CAL_PREFIX}:2026:13")
 
-    await on_calendar_nav(callback)
+    await on_calendar_nav(callback, state)
 
     assert callback.answered == ["Дата поза межами"]
 
@@ -1000,24 +1013,24 @@ async def test_client_can_be_typed_by_hand(
 ):
     """Замовника може не бути в системі — тоді лишається сама назва."""
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
-    await step_ttn(FakeMessage("ТТН-777"), state)
+    await step_ttn(FakeMessage("ТТН-777"), state, session)
     await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
 
-    await step_client_manual(FakeCallback(TRIP_CLIENT_MANUAL), state)
+    await step_client_manual(FakeCallback(TRIP_CLIENT_MANUAL), state, session)
     assert await state.get_state() == TripForm.client_name
     await step_client_name(FakeMessage("ФГ Стороннє"), state, session)
 
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.theirs.id}"), state, session
     )
-    await step_truck(FakeMessage("Volvo"), state)
-    await step_truck_plate(FakeMessage("AA9999AA"), state)
-    await step_trailer(FakeMessage("Schmitz"), state)
-    await step_trailer_type(FakeMessage("зерновоз"), state)
-    await step_trailer_plate(FakeMessage("CC9999CC"), state)
+    await step_truck(FakeMessage("Volvo"), state, session)
+    await step_truck_plate(FakeMessage("AA9999AA"), state, session)
+    await step_trailer(FakeMessage("Schmitz"), state, session)
+    await step_trailer_type(FakeMessage("зерновоз"), state, session)
+    await step_trailer_plate(FakeMessage("CC9999CC"), state, session)
     await step_grain(FakeMessage("Ріпак"), state, session)
-    await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state)
-    await step_driver_name(FakeMessage("Іван Водій"), state)
+    await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state, session)
+    await step_driver_name(FakeMessage("Іван Водій"), state, session)
     await step_driver_phone(FakeMessage("+380500000000"), state, session)
 
     confirm = FakeCallback(TRIP_CONFIRM, user=FakeUser(OWNER_ID))
@@ -1032,9 +1045,9 @@ async def test_client_can_be_typed_by_hand(
 
 async def test_short_client_name_keeps_the_step(session, state, world, logist):
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
-    await step_ttn(FakeMessage("ТТН-778"), state)
+    await step_ttn(FakeMessage("ТТН-778"), state, session)
     await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
-    await step_client_manual(FakeCallback(TRIP_CLIENT_MANUAL), state)
+    await step_client_manual(FakeCallback(TRIP_CLIENT_MANUAL), state, session)
 
     message = FakeMessage("Ф")
     await step_client_name(message, state, session)
@@ -1265,3 +1278,252 @@ async def test_a_driver_from_another_company_is_refused(
     updated = await repository.get_trip(session, trip.id)
     assert updated.driver_id == world.driver.id
     assert "Невідомий співробітник" in callback.message.answers[-1]
+
+
+# ---------------------------------------------------------------------------
+# Маси, час і підказки
+# ---------------------------------------------------------------------------
+
+
+async def test_net_mass_is_computed(session, state, logist, trips, publisher):
+    """Нетто ніхто не вводить: воно рахується з брутто й тари."""
+    await _start_edit(session, state, logist, trips.mine.id, "bmass")
+    await edit_value(FakeMessage("30000"), state, session, logist, publisher)
+    await _start_edit(session, state, logist, trips.mine.id, "tmass")
+    await edit_value(FakeMessage("12500"), state, session, logist, publisher)
+
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert (trip.b_mass, trip.t_mass, trip.n_mass) == (30000, 12500, 17500)
+
+
+async def test_tare_above_gross_is_refused(session, state, logist, trips, publisher):
+    await _start_edit(session, state, logist, trips.mine.id, "bmass")
+    await edit_value(FakeMessage("20000"), state, session, logist, publisher)
+
+    await _start_edit(session, state, logist, trips.mine.id, "tmass")
+    message = FakeMessage("25000")
+    await edit_value(message, state, session, logist, publisher)
+
+    assert "Тара більша за брутто" in message.answers[0]
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.t_mass == 0
+
+
+async def test_net_mass_is_not_offered_for_editing(session, state, logist, trips):
+    """Поля «Нетто» в меню немає — воно похідне."""
+    callback = FakeCallback(f"{TRIP_EDIT_PREFIX}:{trips.mine.id}", user=FakeUser(OWNER_ID))
+
+    await on_trip_edit(callback, state, session, logist)
+
+    keys = callback_data(callback.message.markups[-1])
+    assert any("bmass" in key for key in keys)
+    assert not any("nmass" in key for key in keys)
+
+
+async def test_entry_time_takes_one_tap(session, state, logist, trips, publisher):
+    await _start_edit(session, state, logist, trips.mine.id, "entry")
+
+    await edit_datetime_button(
+        FakeCallback(TRIP_NOW), state, session, logist, publisher
+    )
+
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.datetime_entry == datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+async def test_entry_time_clears_by_button(session, state, logist, trips, publisher):
+    await _start_edit(session, state, logist, trips.mine.id, "entry")
+    await edit_value(FakeMessage("2026-08-10 07:30"), state, session, logist, publisher)
+
+    await _start_edit(session, state, logist, trips.mine.id, "entry")
+    await edit_datetime_button(
+        FakeCallback(TRIP_CLEAR), state, session, logist, publisher
+    )
+
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.datetime_entry is None
+
+
+async def test_the_now_button_needs_a_time_field(
+    session, state, logist, trips, publisher
+):
+    """Стан міг лишитись від іншого поля — кнопка не має писати «зараз»
+    у номер ТТН."""
+    await _start_edit(session, state, logist, trips.mine.id, "ttn")
+    callback = FakeCallback(TRIP_NOW)
+
+    await edit_datetime_button(callback, state, session, logist, publisher)
+
+    assert callback.answered == ["Не зрозуміло, що саме редагуємо"]
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.ttn_num == "МІЙ"
+
+
+async def test_grain_is_picked_from_the_hints(session, state, world, logist):
+    """Підказка — це кнопка, а не довідник: у колонці лишається текст."""
+    await fill_form_until_driver(state, session, logist, world.ours.id, grain=None)
+    await step_trailer_plate(FakeMessage("cc3333cc"), state, session)
+
+    await step_grain_pick(
+        FakeCallback(f"{TRIP_CHOICE_PREFIX}:grain:0"), state, session
+    )
+
+    assert (await state.get_data())["grain_type"] == "Пшениця"
+    assert await state.get_state() == TripForm.driver
+
+
+async def test_typed_grain_still_works(session, state, world, logist):
+    """Культур більше, ніж шість, і клас усе одно дописують руками."""
+    await fill_form_until_driver(
+        state, session, logist, world.ours.id, grain="Пшениця 2 клас"
+    )
+
+    assert (await state.get_data())["grain_type"] == "Пшениця 2 клас"
+
+
+async def test_trailer_type_is_picked_from_the_hints(session, state, world, logist):
+    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
+    await step_ttn(FakeMessage("ТТН-999"), state, session)
+    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+    await step_client_pick(
+        FakeCallback(f"{TRIP_CLIENT_PREFIX}:{world.ours.id}"), state, session
+    )
+    await step_exporter(
+        FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.ours.id}"), state, session
+    )
+    await step_truck(FakeMessage("Volvo"), state, session)
+    await step_truck_plate(FakeMessage("aa1111aa"), state, session)
+    await step_trailer(FakeMessage("Schmitz"), state, session)
+
+    await step_trailer_type_pick(
+        FakeCallback(f"{TRIP_CHOICE_PREFIX}:ttype:0"), state, session
+    )
+
+    assert (await state.get_data())["trailer_type"] == "Зерновоз"
+    assert await state.get_state() == TripForm.trailer_plate
+
+
+async def test_editing_grain_by_button(session, state, logist, trips, publisher):
+    await _start_edit(session, state, logist, trips.mine.id, "grain")
+
+    await edit_choice(
+        FakeCallback(f"{TRIP_CHOICE_PREFIX}:grain:1"), state, session, logist, publisher
+    )
+
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.grain_type == "Кукурудза"
+
+
+# ---------------------------------------------------------------------------
+# Навігація анкетою
+# ---------------------------------------------------------------------------
+
+
+async def test_back_returns_to_the_previous_step(session, state, world, logist):
+    """Описка на третьому кроці з чотирнадцяти більше не означає почати
+    анкету спочатку."""
+    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
+    await step_ttn(FakeMessage("ТТН-000123"), state, session)
+    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+    assert await state.get_state() == TripForm.client
+
+    await on_form_back(FakeCallback(TRIP_BACK), state, session)
+
+    assert await state.get_state() == TripForm.arrival_date
+    # Уже введене лишається: рух назад нічого не стирає.
+    assert (await state.get_data())["ttn_num"] == "ТТН-000123"
+
+
+async def test_back_from_a_branch_returns_to_its_fork(session, state, world, logist):
+    """Ручний ввід замовника — гілка, а не наступний крок: назад із неї має
+    вести на вибір замовника, а не на дату."""
+    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
+    await step_ttn(FakeMessage("ТТН-000123"), state, session)
+    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+    await step_client_manual(FakeCallback(TRIP_CLIENT_MANUAL), state, session)
+    assert await state.get_state() == TripForm.client_name
+
+    await on_form_back(FakeCallback(TRIP_BACK), state, session)
+
+    assert await state.get_state() == TripForm.client
+
+
+async def test_back_from_the_first_step_says_so(session, state, world, logist):
+    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
+    callback = FakeCallback(TRIP_BACK)
+
+    await on_form_back(callback, state, session)
+
+    assert callback.answered == ["Повертатись нікуди"]
+
+
+async def test_the_first_step_has_no_back_button(session, state, world, logist):
+    """Кнопка, яка веде в нікуди, читається як поламана система."""
+    callback = FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID))
+
+    await on_new_trip(callback, state, logist)
+
+    assert TRIP_BACK not in callback_data(callback.message.markups[-1])
+
+
+async def test_editing_from_the_summary_returns_to_the_summary(
+    session, state, world, logist
+):
+    """Головне в цьому кроці: правка одного поля не веде рештою анкети."""
+    await fill_form(state, session, logist, exporter_id=world.ours.id)
+    assert await state.get_state() == TripForm.confirm
+
+    await on_redo(FakeCallback(TRIP_REDO), state)
+    await on_redo_step(FakeCallback(f"{TRIP_REDO_PREFIX}:ttn"), state, session)
+    assert await state.get_state() == TripForm.ttn
+
+    message = FakeMessage("ТТН-ВИПРАВЛЕНА")
+    await step_ttn(message, state, session)
+
+    assert await state.get_state() == TripForm.confirm
+    assert "ТТН-ВИПРАВЛЕНА" in message.answers[-1]
+
+
+async def test_the_corrected_value_reaches_the_trip(
+    session, state, world, logist, publisher
+):
+    await fill_form(state, session, logist, exporter_id=world.ours.id)
+    await on_redo(FakeCallback(TRIP_REDO), state)
+    await on_redo_step(FakeCallback(f"{TRIP_REDO_PREFIX}:grain"), state, session)
+    await step_grain(FakeMessage("Ріпак"), state, session)
+
+    callback = FakeCallback(TRIP_CONFIRM, user=FakeUser(OWNER_ID))
+    await step_confirm(callback, state, session, publisher, logist)
+
+    trips, _ = await repository.list_trips(session)
+    assert trips[0].grain_type == "Ріпак"
+
+
+async def test_the_flag_does_not_outlive_one_correction(
+    session, state, world, logist
+):
+    """Прапорець згорає на підсумку: наступний крок, відкритий уже не з
+    підсумку, має вести анкетою далі, а не стрибати назад."""
+    await fill_form(state, session, logist, exporter_id=world.ours.id)
+    await on_redo(FakeCallback(TRIP_REDO), state)
+    await on_redo_step(FakeCallback(f"{TRIP_REDO_PREFIX}:truck"), state, session)
+    await step_truck(FakeMessage("Scania R500"), state, session)
+    assert await state.get_state() == TripForm.confirm
+
+    # Тепер звичайний прохід: після тягача має йти його номер, а не підсумок.
+    await on_redo(FakeCallback(TRIP_REDO), state)
+    await on_redo_step(FakeCallback(f"{TRIP_REDO_PREFIX}:date"), state, session)
+    await state.update_data(return_to_summary=False)
+    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-09-01"), state, session)
+
+    assert await state.get_state() == TripForm.client
+
+
+async def test_an_unknown_redo_key_is_refused(session, state, world, logist):
+    await fill_form(state, session, logist, exporter_id=world.ours.id)
+    callback = FakeCallback(f"{TRIP_REDO_PREFIX}:вигадане")
+
+    await on_redo_step(callback, state, session)
+
+    assert callback.answered == ["Невідоме поле"]
+    assert await state.get_state() == TripForm.confirm
