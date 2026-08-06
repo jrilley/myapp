@@ -35,13 +35,10 @@ from app.bot.keyboards import (
     MENU_POSITIONS,
     POSITION_ADD,
     POSITION_CARD_PREFIX,
-    POSITION_NEW_ACCESS_PREFIX,
-    POSITION_SET_ACCESS_PREFIX,
     cancel_keyboard,
     company_card_keyboard,
     employee_card_keyboard,
     employee_choice_keyboard,
-    position_access_keyboard,
     position_card_keyboard,
 )
 from app.bot.states import CompanyEdit, EmployeeEdit, PositionForm
@@ -567,57 +564,12 @@ async def position_name(
         )
         return
 
-    await state.update_data(position_name=value)
-    await state.set_state(PositionForm.self_service)
-    await message.answer(
-        f"Посада «{escape(value)}».\nЧи може людина обрати її сама при реєстрації?",
-        reply_markup=position_access_keyboard(
-            POSITION_NEW_ACCESS_PREFIX, back=MENU_POSITIONS
-        ),
-    )
-
-
-@router.callback_query(
-    PositionForm.self_service, F.data.startswith(f"{POSITION_NEW_ACCESS_PREFIX}:")
-)
-async def position_self_service(
-    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
-) -> None:
-    if await _deny(callback, access):
-        return
-    self_service = (callback.data or "").rsplit(":", 1)[-1] == "1"
-
-    data = await state.get_data()
     await state.clear()
-    await callback.answer()
-    if callback.message is None:
-        return
-
-    # Назву могли зайняти, поки анкета була відкрита.
-    if await repository.get_position_by_name(session, data["position_name"]):
-        text, keyboard = await render_positions(session)
-        await callback.message.answer(
-            f"Посада «{escape(data['position_name'])}» уже є.\n\n{text}",
-            reply_markup=keyboard,
-        )
-        return
-
-    position = await repository.create_position(
-        session, name=data["position_name"], self_service=self_service
-    )
+    position = await repository.create_position(session, name=value)
     text, keyboard = await render_positions(session)
-    await callback.message.answer(
-        f"✅ Посаду «{escape(position.position)}» додано — "
-        f"{_access_note(position)}.\n\n{text}",
+    await message.answer(
+        f"✅ Посаду «{escape(position.position)}» додано.\n\n{text}",
         reply_markup=keyboard,
-    )
-
-
-def _access_note(position) -> str:
-    return (
-        "її можна обрати при реєстрації"
-        if position.self_service
-        else "її призначає лише адміністратор"
     )
 
 
@@ -641,40 +593,10 @@ async def on_position_card(
         employees = await repository.count_position_employees(session, position.id)
         await callback.message.answer(
             f"<b>{escape(position.position)}</b>\n\n"
-            f"<b>Доступ:</b> {_access_note(position)}\n"
             f"<b>Співробітників на посаді:</b> {employees}\n\n"
-            "<i>Роль доступу від посади не залежить — її призначає головний "
-            "адміністратор у картці співробітника.</i>",
-            reply_markup=position_card_keyboard(position.id, position.self_service),
-        )
-
-
-@router.callback_query(F.data.startswith(f"{POSITION_SET_ACCESS_PREFIX}:"))
-async def on_position_set_access(
-    callback: CallbackQuery, session: AsyncSession, access: Access
-) -> None:
-    if await _deny(callback, access):
-        return
-    parts = (callback.data or "").split(":")
-    if len(parts) != 4 or not parts[2].isdigit():
-        await callback.answer("Невідома посада", show_alert=True)
-        return
-
-    position = await repository.get_position(session, int(parts[2]))
-    if position is None:
-        await callback.answer("Посаду не знайдено", show_alert=True)
-        return
-
-    position = await repository.set_position_self_service(
-        session, position, parts[3] == "1"
-    )
-    await callback.answer("Збережено")
-    if callback.message is not None:
-        text, keyboard = await render_positions(session)
-        await callback.message.answer(
-            f"✅ Посада «{escape(position.position)}» — {_access_note(position)}."
-            f"\n\n{text}",
-            reply_markup=keyboard,
+            "<i>Посада не дає прав: роль доступу призначається окремо, "
+            "в картці співробітника.</i>",
+            reply_markup=position_card_keyboard(position.id),
         )
 
 

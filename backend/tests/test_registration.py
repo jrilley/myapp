@@ -12,6 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
 from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER
+from app.models import DEFAULT_POSITION, ROLE_DRIVER
 from app.bot.handlers.registration import (
     company_address,
     company_chat,
@@ -29,7 +30,6 @@ from app.bot.handlers.registration import (
     step_phone2_no,
     step_phone2_yes,
     step_phone_shared,
-    step_position,
 )
 from app.bot.keyboards import (
     CANCEL_TEXT,
@@ -38,7 +38,6 @@ from app.bot.keyboards import (
     REG_COMPANY_PREFIX,
     REG_PHONE2_NO,
     REG_PHONE2_YES,
-    REG_POSITION_PREFIX,
 )
 from app.bot.states import CompanyForm, Registration
 from app.models import Company, Position, Role
@@ -66,20 +65,21 @@ def state() -> FSMContext:
 async def reference_data(session):
     """Довідники, без яких реєстрація неможлива."""
     company = Company(name="ТОВ Ромашка", tax_id="12345678", address="Київ")
-    position = Position(id=1, position="Інше", self_service=True)
+    position = Position(id=1, position="Водій")
     session.add_all(
         [
             company,
             position,
             Role(id=1, role=ROLE_MAIN_ADMIN),
             Role(id=3, role=ROLE_USER),
+            Role(id=4, role=ROLE_DRIVER),
         ]
     )
     await session.commit()
     return company, position
 
 
-async def _walk_through(state, session, company, position, *, second_phone=None):
+async def _walk_through(state, session, company, position=None, *, second_phone=None):
     await step_fullname(FakeMessage("Олена Ковальчук"), state)
     await step_phone(FakeMessage("+380671112233"), state)
     if second_phone is None:
@@ -87,13 +87,9 @@ async def _walk_through(state, session, company, position, *, second_phone=None)
     else:
         await step_phone2_yes(FakeCallback(REG_PHONE2_YES), state)
         await step_phone2(FakeMessage(second_phone), state, session)
-    await step_company(
-        FakeCallback(f"{REG_COMPANY_PREFIX}:{company.id}"), state, session
-    )
-    # Повертаємо останній callback: у його повідомленні лежить зведення,
-    # яке деякі тести перевіряють.
-    callback = FakeCallback(f"{REG_POSITION_PREFIX}:{position.id}")
-    await step_position(callback, state, session)
+    # Останній крок анкети — компанія; у його повідомленні лежить зведення.
+    callback = FakeCallback(f"{REG_COMPANY_PREFIX}:{company.id}")
+    await step_company(callback, state, session)
     return callback
 
 
@@ -117,55 +113,43 @@ async def test_registration_creates_an_employee(
     assert employee.fullname == "Олена Ковальчук"
     assert employee.phone_number == "+380671112233"
     assert employee.company_id == company.id
-    assert employee.position_id == position.id
-    # Роль при реєстрації завжди базова: підвищує її головний адміністратор.
-    assert employee.role.role == ROLE_USER
+    assert employee.position.position == DEFAULT_POSITION
+    # Роль при реєстрації завжди «Водій»: підвищує її головний адміністратор.
+    assert employee.role.role == ROLE_DRIVER
     assert await state.get_state() is None
 
 
-async def test_only_self_service_positions_are_offered(
+async def test_registration_does_not_ask_for_a_position(
     session, state, access_guest, reference_data
 ):
-    """Керівні посади призначає головний адміністратор, тож у списку
-    самостійної реєстрації їх бути не має."""
+    """Посада в усіх однакова, тож кроку немає — але людина має бачити,
+    ким її запишуть, ще до підтвердження."""
     company, _ = reference_data
-    await repository.create_position(session, name="Директор", self_service=False)
-
     await on_register(FakeCallback("reg:start"), state, session, access_guest)
-    await step_fullname(FakeMessage("Олена Ковальчук"), state)
-    await step_phone(FakeMessage("+380671112233"), state)
-    await step_phone2_no(FakeCallback(REG_PHONE2_NO), state, session)
-    callback = FakeCallback(f"{REG_COMPANY_PREFIX}:{company.id}")
-    await step_company(callback, state, session)
 
-    labels = [
-        b.text for row in callback.message.markups[0].inline_keyboard for b in row
-    ]
-    assert "Інше" in labels
-    assert "Директор" not in labels
+    callback = await _walk_through(state, session, company)
+
+    assert await state.get_state() == Registration.confirm
+    assert f"<b>Посада:</b> {DEFAULT_POSITION}" in callback.message.answers[0]
 
 
-async def test_closed_position_is_refused_even_by_id(
+async def test_registration_without_the_driver_role_is_refused(
     session, state, access_guest, reference_data
 ):
-    """Кнопки немає, але callback_data можна підробити — інакше будь-хто
-    записав би себе директором."""
+    """Роль «Водій» — обов'язковий довідниковий рядок. Якщо його немає,
+    краще сказати про це, ніж падати помилкою зовнішнього ключа."""
     company, _ = reference_data
-    director = await repository.create_position(
-        session, name="Директор", self_service=False
-    )
+    role = await repository.get_role_by_name(session, ROLE_DRIVER)
+    await session.delete(role)
+    await session.commit()
 
     await on_register(FakeCallback("reg:start"), state, session, access_guest)
-    await step_fullname(FakeMessage("Олена Ковальчук"), state)
-    await step_phone(FakeMessage("+380671112233"), state)
-    await step_phone2_no(FakeCallback(REG_PHONE2_NO), state, session)
-    await step_company(FakeCallback(f"{REG_COMPANY_PREFIX}:{company.id}"), state, session)
+    await _walk_through(state, session, company)
+    callback = FakeCallback("reg:confirm", user=FakeUser(STRANGER_ID))
+    await step_confirm(callback, state, session, access_guest)
 
-    callback = FakeCallback(f"{REG_POSITION_PREFIX}:{director.id}")
-    await step_position(callback, state, session)
-
-    assert callback.answered == ["Невідома посада"]
-    assert await state.get_state() == Registration.position
+    assert await repository.count_employees(session) == 0
+    assert ROLE_DRIVER in callback.message.answers[0]
 
 
 async def test_menu_after_registration_is_the_user_menu(

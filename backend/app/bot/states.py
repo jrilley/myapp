@@ -13,14 +13,17 @@ class ApplicationForm(StatesGroup):
 
 
 class Registration(StatesGroup):
-    """Реєстрація нового співробітника — рядок у employees."""
+    """Реєстрація нового співробітника — рядок у employees.
+
+    Посаду не питаємо: новий співробітник завжди «Водій», і посаду з роллю
+    змінює головний адміністратор у картці.
+    """
 
     fullname = State()
     phone = State()
     phone2_ask = State()
     phone2 = State()
     company = State()
-    position = State()
     confirm = State()
 
 
@@ -52,14 +55,9 @@ class EmployeeEdit(StatesGroup):
 
 
 class PositionForm(StatesGroup):
-    """Додавання посади в довідник.
-
-    Другим кроком питаємо, чи можна обрати цю посаду при самостійній
-    реєстрації: керівні посади має призначати адміністратор.
-    """
+    """Додавання посади в довідник."""
 
     name = State()
-    self_service = State()
 
 
 class VehicleForm(StatesGroup):

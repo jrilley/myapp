@@ -3,7 +3,6 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -164,13 +163,13 @@ class Company(Base):
 ROLE_MAIN_ADMIN = "Головний адміністратор"
 ROLE_COMPANY_ADMIN = "Адміністратор компанії"
 ROLE_USER = "Користувач"
+ROLE_DRIVER = "Водій"
 
-#: Посади, які людина може обрати сама при реєстрації. Список потрібен лише
-#: для сіду нових БД: далі ознака живе в positions.self_service, і головний
-#: адмін міняє її кнопкою, а не правкою коду.
-#:
-#: «Директор» сюди свідомо не входить — його призначає адміністратор.
-SELF_SERVICE_POSITIONS = ("Водій", "Диспетчер", "Оператор", "Менеджер", "Логіст")
+#: Що отримує кожен, хто щойно зареєструвався. Посада й роль однойменні, але
+#: це різні речі: посада каже, ким людина працює, роль — що їй дозволено.
+#: Обидві змінює головний адміністратор у картці співробітника.
+DEFAULT_POSITION = "Водій"
+DEFAULT_ROLE = ROLE_DRIVER
 
 
 class Position(Base):
@@ -181,16 +180,6 @@ class Position(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     position: Mapped[str] = mapped_column(
         Text, nullable=False, unique=True, doc="Назва посади, унікальна."
-    )
-    self_service: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default="0",
-        doc=(
-            "Чи може людина обрати цю посаду сама при реєстрації. Керівні "
-            "посади призначає головний адміністратор, тож тут False."
-        ),
     )
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="position")
@@ -247,13 +236,15 @@ class Employee(Base):
         doc="Додатковий номер, якщо користувач його вказав. Необов'язковий.",
     )
     position_id: Mapped[int] = mapped_column(
-        ForeignKey("positions.id"), nullable=False, doc="Посада з довідника positions."
+        ForeignKey("positions.id"),
+        nullable=False,
+        doc="Посада з довідника positions. При реєстрації завжди «Водій».",
     )
     role_id: Mapped[int] = mapped_column(
         ForeignKey("roles.id"),
         nullable=False,
         doc=(
-            "Роль доступу. При реєстрації завжди «Користувач»; підвищує її "
+            "Роль доступу. При реєстрації завжди «Водій»; підвищує її "
             "головний адміністратор вручну. З посадою не пов'язана."
         ),
     )

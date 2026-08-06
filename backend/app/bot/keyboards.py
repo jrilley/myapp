@@ -34,11 +34,7 @@ EMP_VIEW_PREFIX = "emp"
 EMP_EDIT_PREFIX = "empedit"
 EMP_SET_PREFIX = "empset"
 POSITION_ADD = "position:add"
-#: Чи можна обрати посаду самостійно: крок анкети нової посади…
-POSITION_NEW_ACCESS_PREFIX = "position:newaccess"
 POSITION_CARD_PREFIX = "position:card"
-#: …і зміна в наявній: position:access:<посада>:<0|1>.
-POSITION_SET_ACCESS_PREFIX = "position:access"
 
 MENU_VEHICLE_ADD = "menu:vehicle"
 #: Для адміністратора компанії — власна компанія мається на увазі.
@@ -153,7 +149,6 @@ DELETE_PREFIX = "del"
 
 REG_START = "reg:start"
 REG_COMPANY_PREFIX = "reg:company"
-REG_POSITION_PREFIX = "reg:position"
 REG_CONFIRM = "reg:confirm"
 REG_PHONE2_YES = "reg:phone2:yes"
 REG_PHONE2_NO = "reg:phone2:no"
@@ -441,13 +436,11 @@ def vehicle_card_keyboard(kind: str, vehicle_id: int, back: str) -> InlineKeyboa
 def positions_keyboard(
     positions=(), *, offset: int = 0, total: int | None = None
 ) -> InlineKeyboardMarkup:
-    """Довідник посад: кожна — кнопка. Підпис каже, чи можна обрати посаду
-    при реєстрації, чи її призначає лише адміністратор."""
+    """Довідник посад: кожна — кнопка, що відкриває картку."""
     builder = InlineKeyboardBuilder()
     for position in positions:
-        mark = "самостійно" if position.self_service else "лише адмін"
         builder.button(
-            text=f"{position.position} — {mark}",
+            text=position.position,
             callback_data=f"{POSITION_CARD_PREFIX}:{position.id}",
         )
     builder.adjust(1)
@@ -462,30 +455,9 @@ def positions_keyboard(
     return builder.as_markup()
 
 
-def position_access_keyboard(prefix: str, *, back: str) -> InlineKeyboardMarkup:
-    """Так/ні для самостійного вибору посади. `prefix` вирішує, куди піде
-    відповідь: у нову посаду (крок анкети) чи в наявну."""
+def position_card_keyboard(position_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Так, доступна при реєстрації", callback_data=f"{prefix}:1")
-    builder.button(text="🔒 Ні, лише через адміністратора", callback_data=f"{prefix}:0")
-    builder.button(text="⬅️ Назад", callback_data=back)
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def position_card_keyboard(position_id: int, self_service: bool) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    # Одна кнопка, що перемикає в протилежний бік: показувати обидва варіанти,
-    # один з яких уже діє, — зайвий вибір.
-    builder.button(
-        text="🔒 Лише через адміністратора" if self_service
-        else "✅ Дозволити при реєстрації",
-        callback_data=(
-            f"{POSITION_SET_ACCESS_PREFIX}:{position_id}:{0 if self_service else 1}"
-        ),
-    )
     builder.button(text="⬅️ До посад", callback_data=MENU_POSITIONS)
-    builder.adjust(1)
     return builder.as_markup()
 
 

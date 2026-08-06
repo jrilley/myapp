@@ -100,9 +100,7 @@ async def world(session):
             Role(id=1, role=ROLE_MAIN_ADMIN),
             Role(id=2, role=ROLE_COMPANY_ADMIN),
             Role(id=3, role=ROLE_USER),
-            # Посада дає роль: диспетчер — звичайний користувач, логіст —
-            # адміністратор компанії.
-            Position(id=1, position="Диспетчер", self_service=True),
+            Position(id=1, position="Диспетчер"),
             Position(id=2, position="Логіст"),
         ]
     )
@@ -119,7 +117,6 @@ async def world(session):
         theirs=theirs,
         logist=await employee(OWNER_ID, ours, "Марія Диспетчер", "+380501112233", 1, 3),
         boss=await employee(ADMIN_ID, ours, "Олег Логіст", "+380502223344", 2, 2),
-        # Головного адміністратора не дає жодна посада — його призначають вручну.
         chief=await employee(CHIEF_ID, ours, "Головний Адмін", "+380509998877", 2, 1),
         driver=await employee(DRIVER_ID, ours, "Петро Водій", "+380507778899", 1, 3),
         outsider=await employee(

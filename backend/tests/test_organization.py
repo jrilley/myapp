@@ -117,14 +117,14 @@ async def test_reference_names_are_unique(session, model, field, value):
         await session.commit()
 
 
-async def test_position_is_not_self_service_by_default(session):
-    """Нова посада за замовчуванням закрита: щоб додана мимохідь керівна
-    посада не опинилась одразу в списку самостійної реєстрації."""
+async def test_position_is_just_a_name(session):
+    """Посада нічого не вирішує: прав вона не дає, роль призначається окремо.
+    Тому для створення досить назви."""
     position = Position(position="Вагар")
     session.add(position)
     await session.commit()
 
-    assert position.self_service is False
+    assert position.id is not None
 
 
 @pytest.mark.parametrize("model", [Truck, Trailer])

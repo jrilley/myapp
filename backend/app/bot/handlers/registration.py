@@ -1,9 +1,9 @@
 """Реєстрація співробітника та заведення компаній.
 
 Реєстрація обов'язкова: без рядка в employees рейс не створити.
-Роль новому співробітнику завжди «Користувач»: підвищує її головний
-адміністратор вручну. Посади пропонуються лише самообслуговувані —
-керівні призначає теж він.
+Посада й роль новому співробітнику однакові — «Водій»; змінює їх
+головний адміністратор у картці. Питати посаду немає сенсу: людина не
+може призначити її собі сама, а зайвий крок лише подовжує анкету.
 """
 
 from aiogram import F, Router
@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.access import ROLE_USER, Access
+from app.bot.access import Access
 from app.bot.actions import render_companies
 from app.bot.constants import (
     MAX_ADDRESS,
@@ -32,7 +32,6 @@ from app.bot.keyboards import (
     REG_CONFIRM,
     REG_PHONE2_NO,
     REG_PHONE2_YES,
-    REG_POSITION_PREFIX,
     REG_START,
     cancel_keyboard,
     choices_keyboard,
@@ -43,6 +42,7 @@ from app.bot.keyboards import (
     share_phone_keyboard,
 )
 from app.bot.states import CompanyForm, Registration
+from app.models import DEFAULT_POSITION, DEFAULT_ROLE
 
 router = Router(name="registration")
 
@@ -214,50 +214,11 @@ async def step_company(
         return
 
     await state.update_data(company_id=company.id, company_name=company.name)
-    await state.set_state(Registration.position)
-    await callback.answer()
-
-    # Лише самообслуговувані посади: керівні призначає головний адміністратор,
-    # інакше будь-хто записав би себе директором.
-    positions = await repository.list_positions(session, self_service_only=True)
-    if callback.message is None:
-        return
-    if not positions:
-        await state.clear()
-        await callback.message.answer(
-            "Реєстрація поки неможлива: у довіднику немає жодної посади, "
-            "доступної для самостійного вибору.\n"
-            "Зверніться до головного адміністратора.",
-        )
-        return
-    await callback.message.answer(
-        "Оберіть посаду:",
-        reply_markup=choices_keyboard(
-            REG_POSITION_PREFIX, [(p.id, p.position) for p in positions]
-        ),
-    )
-
-
-@router.callback_query(
-    Registration.position, F.data.startswith(f"{REG_POSITION_PREFIX}:")
-)
-async def step_position(
-    callback: CallbackQuery, state: FSMContext, session: AsyncSession
-) -> None:
-    raw_id = (callback.data or "").rsplit(":", 1)[-1]
-    position = (
-        await repository.get_position(session, int(raw_id)) if raw_id.isdigit() else None
-    )
-    # Перевіряємо не лише існування, а й доступність: callback_data можна
-    # підробити, і тоді людина записала б себе на керівну посаду.
-    if position is None or not position.self_service:
-        await callback.answer("Невідома посада", show_alert=True)
-        return
-
-    await state.update_data(position_id=position.id, position_name=position.position)
     await state.set_state(Registration.confirm)
     await callback.answer()
 
+    # Посаду не питаємо — вона в усіх однакова. У зведенні її все одно
+    # показуємо: людина має бачити, ким її запишуть, а не дізнаватись потім.
     data = await state.get_data()
     extra = data.get("phone_number2")
     if callback.message is not None:
@@ -267,7 +228,8 @@ async def step_position(
             f"<b>Телефон:</b> {data['phone_number']}\n"
             + (f"<b>Додатковий:</b> {extra}\n" if extra else "")
             + f"<b>Компанія:</b> {data['company_name']}\n"
-            f"<b>Посада:</b> {data['position_name']}",
+            f"<b>Посада:</b> {DEFAULT_POSITION}\n\n"
+            "<i>Посаду й доступ за потреби змінить адміністратор.</i>",
             reply_markup=registration_confirm_keyboard(),
         )
 
@@ -293,24 +255,16 @@ async def step_confirm(
         )
         return
 
-    # Перечитуємо посаду: поки анкета була відкрита, головний адмін міг
-    # прибрати її з довідника або закрити для самостійного вибору.
-    position = await repository.get_position(session, data["position_id"])
-    if position is None or not position.self_service:
+    # Посада й роль однакові в усіх нових: підвищує їх головний адміністратор
+    # вручну, тож підвищення прав лишається свідомою дією людини.
+    position = await repository.get_position_by_name(session, DEFAULT_POSITION)
+    role = await repository.get_role_by_name(session, DEFAULT_ROLE)
+    if position is None or role is None:
+        missing = DEFAULT_POSITION if position is None else DEFAULT_ROLE
         await callback.message.answer(
-            "Обрана посада більше недоступна для самостійного вибору. "
-            "Почніть реєстрацію заново.",
+            f"Не вдалося завершити реєстрацію: у довідниках немає «{missing}». "
+            "Зверніться до адміністратора.",
             reply_markup=_menu(access),
-        )
-        return
-
-    # Роль завжди базова. Підвищує її головний адміністратор вручну —
-    # так підвищення прав лишається свідомою дією людини.
-    role = await repository.get_role_by_name(session, ROLE_USER)
-    if role is None:
-        await callback.message.answer(
-            "Не вдалося завершити реєстрацію: у довіднику ролей немає "
-            f"«{ROLE_USER}». Зверніться до адміністратора."
         )
         return
 

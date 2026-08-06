@@ -302,15 +302,9 @@ async def update_company(session: AsyncSession, company: Company, **fields) -> C
     return company
 
 
-async def list_positions(
-    session: AsyncSession, *, self_service_only: bool = False
-) -> list[Position]:
-    """Повний список посад; із `self_service_only` — лише ті, які людина
-    може обрати сама при реєстрації."""
-    stmt = select(Position).order_by(Position.id)
-    if self_service_only:
-        stmt = stmt.where(Position.self_service.is_(True))
-    return list(await session.scalars(stmt))
+async def list_positions(session: AsyncSession) -> list[Position]:
+    """Повний список — для клавіатури вибору посади в картці співробітника."""
+    return list(await session.scalars(select(Position).order_by(Position.id)))
 
 
 async def page_positions(
@@ -329,26 +323,11 @@ async def get_position_by_name(session: AsyncSession, name: str) -> Position | N
     return await session.scalar(select(Position).where(Position.position == name))
 
 
-async def create_position(
-    session: AsyncSession, *, name: str, self_service: bool = False
-) -> Position:
-    position = Position(position=name, self_service=self_service)
+async def create_position(session: AsyncSession, *, name: str) -> Position:
+    position = Position(position=name)
     session.add(position)
     await session.commit()
     await session.refresh(position)
-    return position
-
-
-async def set_position_self_service(
-    session: AsyncSession, position: Position, value: bool
-) -> Position:
-    """Чи можна обрати цю посаду при самостійній реєстрації.
-
-    Ролей не чіпає: роль призначає головний адміністратор вручну, і зміна
-    довідника посад не має тихо міняти чиїсь права.
-    """
-    position.self_service = value
-    await session.commit()
     return position
 
 
