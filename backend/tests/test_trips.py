@@ -868,7 +868,7 @@ async def test_foreign_trip_cannot_be_deleted(session, logist, trips, publisher)
 
 @pytest.fixture
 async def operator(session, world) -> Access:
-    employee = await repository.create_employee(
+    await repository.create_employee(
         session, tg_id=6006, company_id=world.ours.id, fullname="Ольга Ваги",
         phone_number="+380506660000", position_id=1, role_id=5,
     )
