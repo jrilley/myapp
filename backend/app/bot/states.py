@@ -61,16 +61,17 @@ class PositionForm(StatesGroup):
 
 
 class VehicleForm(StatesGroup):
-    """Додавання тягача або причепа.
+    """Додавання транспорту в довідник.
 
     Крок `company` проходить лише головний адміністратор — адміністратору
     компанії company_id береться з його власного запису в employees.
     """
 
-    kind = State()
+    #: Вид: «Тягач» або вид причепа. «Тягач чи причіп» окремо не питаємо —
+    #: це з нього й випливає.
+    type = State()
     company = State()
-    brand = State()
-    model = State()
+    make_model = State()
     license_plate = State()
     confirm = State()
 
@@ -78,8 +79,9 @@ class VehicleForm(StatesGroup):
 class VehicleEdit(StatesGroup):
     """Редагування наявного транспорту з його картки."""
 
-    brand = State()
-    model = State()
+    #: Вид обирається кнопкою, тому має власний стан.
+    type = State()
+    make_model = State()
     license_plate = State()
 
 
@@ -98,9 +100,14 @@ class TripForm(StatesGroup):
     #: …або вводять назву руками, якщо його в системі немає.
     client_name = State()
     exporter = State()
+    #: Тягач і причіп обирають із довідника vehicles…
     truck = State()
+    #: …або вводять руками, якщо машина чужа. Причіп у ручній гілці ще й
+    #: питає вид — у довіднику він береться із самого запису.
+    truck_manual = State()
     truck_plate = State()
     trailer = State()
+    trailer_manual = State()
     trailer_type = State()
     trailer_plate = State()
     grain = State()
@@ -126,6 +133,12 @@ class TripEdit(StatesGroup):
     arrival_date = State()
     exporter = State()
     status = State()
+    #: Транспорт — вибір із довідника або ручний ввід, як і в анкеті.
+    truck = State()
+    trailer = State()
+    vehicle_name = State()
+    vehicle_type = State()
+    vehicle_plate = State()
     #: Водій — теж кнопка, але з двома гілками: вибір зі складу компанії…
     driver = State()
     #: …або ручний ввід стороннього перевізника, і тоді потрібні два кроки.

@@ -473,15 +473,13 @@ MATRIX_ROWS = [
 ]
 
 
-VEHICLE_COLUMNS = [
+ORG_TABLES["vehicles"] = [
     ("id", "INTEGER", "PK"),
-    ("brand", "TEXT NOT NULL", ""),
-    ("model", "TEXT NOT NULL", ""),
+    ("type", "TEXT NOT NULL", "IX"),
+    ("make_model", "TEXT NOT NULL", ""),
     ("license_plate", "TEXT NOT NULL", "UQ"),
-    ("company_id", "INTEGER", "FK"),
+    ("owner_company_id", "INTEGER", "FK"),
 ]
-ORG_TABLES["truck"] = VEHICLE_COLUMNS
-ORG_TABLES["trailer"] = VEHICLE_COLUMNS
 
 
 def page_organization(s: Sheet) -> None:
@@ -515,15 +513,13 @@ def page_organization(s: Sheet) -> None:
         right_x, ty, right_w, "employees", ORG_TABLES["employees"], accent=RUST
     )
 
-    # truck і trailer однакові за структурою (у коді — спільний міксин),
-    # тому показуємо одним блоком, а не двома копіями тих самих рядків.
     vehicle_ty = 396
     s.entity(
-        right_x, vehicle_ty, right_w, "truck   ·   trailer", VEHICLE_COLUMNS,
+        right_x, vehicle_ty, right_w, "vehicles", ORG_TABLES["vehicles"],
         accent=RUST,
     )
     s.text(right_x, vehicle_ty + 138,
-           "дві окремі таблиці з ідентичною структурою; company_id → company.id",
+           "тягачі й причепи разом; «тягач» — це рівно type = «Тягач»",
            font="Sans", size=7.4, color=SLATE)
 
     # Стрілки від FK-колонок employees до відповідних таблиць.
@@ -587,8 +583,10 @@ TRIP_ENTERED = [
     ("client_company_id", "INTEGER", "FK"),
     ("client_company_name", "TEXT NOT NULL", ""),
     ("exporter_company_id", "INTEGER NOT NULL", "FK"),
+    ("truck_id", "INTEGER", "FK"),
     ("truck", "TEXT NOT NULL", ""),
     ("truck_license_plate", "TEXT NOT NULL", ""),
+    ("trailer_id", "INTEGER", "FK"),
     ("trailer", "TEXT NOT NULL", ""),
     ("trailer_type", "TEXT NOT NULL", ""),
     ("trailer_license_plate", "TEXT NOT NULL", ""),
@@ -628,14 +626,11 @@ TRIP_STEPS = [
     ("02", "Дата прибуття", "календар, не текст"),
     ("03", "Замовник", "зі списку або вручну"),
     ("04", "Експортер", "кнопки: назва + ІПН"),
-    ("05", "Тягач", "марка й модель"),
-    ("06", "Номер тягача", "верхній регістр"),
-    ("07", "Причіп", "марка й модель"),
-    ("08", "Тип причепа", "кнопки або текст"),
-    ("09", "Номер причепа", "не такий, як у тягача"),
-    ("10", "Культура", "кнопки або текст"),
-    ("11", "Водій", "зі складу або вручну"),
-    ("12", "Перевірка", "«Створити» або «Змінити»"),
+    ("05", "Тягач", "з довідника або вручну"),
+    ("06", "Причіп", "вид приходить із ним"),
+    ("07", "Культура", "кнопки або текст"),
+    ("08", "Водій", "зі складу або вручну"),
+    ("09", "Перевірка", "створити або змінити"),
 ]
 
 #: Ланцюг статусів. Береться з моделі, щоб аркуш не розійшовся з кодом.
@@ -659,13 +654,15 @@ def page_trip(s: Sheet) -> None:
     s.eyebrow(M, 46, "myapp · схема системи", color=TEAL)
     s.text(M, 76, "Рейс", font="Sans-Bold", size=25, color=INK)
     s.wrap(M, 96, 700,
-           "Рейс заводить менеджер: одинадцять кроків і підтвердження. На кожному "
+           "Рейс заводить менеджер: вісім кроків і підтвердження. На кожному "
            "кроці, крім першого, є «Назад», а на підсумку — «Змінити»: виправити "
            "одне поле можна, не проходячи анкету заново. Замовника й водія "
            "обирають зі списку або вводять руками — вони цілком можуть бути поза "
            "системою. А от компанію-власника й контакти менеджера бот не питає: "
            "вони беруться з рядка employees того, хто заповнює форму. Саме за "
-           "власником працюють доступ і дублювання в робочий чат.",
+           "власником працюють доступ і дублювання в робочий чат. Тягач і причіп "
+           "беруться з довідника vehicles: марка, номер, а для причепа й вид "
+           "приходять разом із машиною.",
            size=8.6, leading=11.5)
     s.text(s.W - M, 76, "аркуш 5 / 5", font="Mono", size=8, color=SLATE, align="right")
 
@@ -690,19 +687,21 @@ def page_trip(s: Sheet) -> None:
            "Telegram рахує ті 64 байти, а кирилична літера коштує дві.",
            size=7.5, leading=10, color=SLATE)
 
-    # Ліва колонка виросла до 14 рядків — секція кроків іде під нею.
-    ty2 = s.section(M, 505, s.W - 2 * M, "порядок кроків")
-    chip_w = (s.W - 2 * M - 5 * 10) / 6
+    # Ліва колонка виросла до 16 рядків — секція кроків іде під нею. Кроків
+    # стало дев'ять, тож вони вміщуються в один ряд.
+    ty2 = s.section(M, 545, s.W - 2 * M, "порядок кроків")
+    per_row = len(TRIP_STEPS)
+    chip_w = (s.W - 2 * M - (per_row - 1) * 10) / per_row
     for i, (num, title, rule) in enumerate(TRIP_STEPS):
-        cx = M + (i % 6) * (chip_w + 10)
-        cy = ty2 + (i // 6) * 52
+        cx = M + (i % per_row) * (chip_w + 10)
+        cy = ty2 + (i // per_row) * 52
         s.box(cx, cy, chip_w, 44, fill=PANEL, stroke=LINE)
         s.line(cx, cy, cx, cy + 44, color=TEAL, width=2.5)
         s.text(cx + 10, cy + 18, num, font="Mono-Bold", size=9.5, color=TEAL)
         s.text(cx + 32, cy + 18, title, font="Sans-Bold", size=8.5, color=INK)
         s.text(cx + 32, cy + 33, rule, font="Mono", size=7, color=SLATE)
 
-    note_ty = 640
+    note_ty = 630
     s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
     s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
     s.wrap(M + 12, note_ty + 18, s.W - 2 * M - 24,
@@ -715,7 +714,7 @@ def page_trip(s: Sheet) -> None:
            "документі — «Менеджер».",
            size=8, leading=10.5, color=AMBER)
 
-    ty3 = s.section(M, 694, s.W - 2 * M, "хто які рейси бачить")
+    ty3 = s.section(M, 692, s.W - 2 * M, "хто які рейси бачить")
     for i, (who, what) in enumerate(VISIBILITY):
         s.text(M, ty3 + 12 + i * 16, who, font="Sans-Bold", size=8, color=INK)
         s.text(M + 170, ty3 + 12 + i * 16, what, font="Mono", size=7.5, color=SLATE)

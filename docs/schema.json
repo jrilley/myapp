@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "54ed2bf7c71c",
+  "alembic_head": "8ab5b0392923",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -883,8 +883,8 @@
       ],
       "indexes": []
     },
-    "trailer": {
-      "description": "Причіп.",
+    "vehicles": {
+      "description": "Тягач або причіп.",
       "primary_key": [
         "id"
       ],
@@ -908,7 +908,7 @@
           "description": null
         },
         {
-          "name": "brand",
+          "name": "type",
           "type": {
             "generic": "TEXT",
             "sqlite": "TEXT",
@@ -923,10 +923,10 @@
           "on_update": null,
           "unique": false,
           "references": null,
-          "description": "Марка."
+          "description": "Вид із VEHICLE_TYPES: «Тягач» або вид причепа («Зерновоз» тощо)."
         },
         {
-          "name": "model",
+          "name": "make_model",
           "type": {
             "generic": "TEXT",
             "sqlite": "TEXT",
@@ -941,7 +941,7 @@
           "on_update": null,
           "unique": false,
           "references": null,
-          "description": "Модель."
+          "description": "Марка й модель одним рядком, як їх називають."
         },
         {
           "name": "license_plate",
@@ -957,12 +957,12 @@
           "default": null,
           "server_default": null,
           "on_update": null,
-          "unique": false,
+          "unique": true,
           "references": null,
-          "description": "Державний номер, унікальний у межах своєї таблиці."
+          "description": "Державний номер, унікальний."
         },
         {
-          "name": "company_id",
+          "name": "owner_company_id",
           "type": {
             "generic": "INTEGER",
             "sqlite": "INTEGER",
@@ -977,10 +977,13 @@
           "on_update": null,
           "unique": false,
           "references": "company.id",
-          "description": "Компанія-власник. Nullable — так задано у вихідній схемі."
+          "description": "Компанія-власник. За нею працює обсяг доступу: у списку транспорту видно машини своєї компанії. Nullable — власника могли не вказати."
         }
       ],
       "unique_constraints": [
+        [
+          "license_plate"
+        ],
         [
           "license_plate"
         ]
@@ -988,7 +991,7 @@
       "foreign_keys": [
         {
           "columns": [
-            "company_id"
+            "owner_company_id"
           ],
           "references": [
             "company.id"
@@ -997,123 +1000,22 @@
           "on_update": null
         }
       ],
-      "indexes": []
-    },
-    "truck": {
-      "description": "Тягач.",
-      "primary_key": [
-        "id"
-      ],
-      "columns": [
+      "indexes": [
         {
-          "name": "id",
-          "type": {
-            "generic": "INTEGER",
-            "sqlite": "INTEGER",
-            "postgresql": "INTEGER"
-          },
-          "python_type": "int",
-          "nullable": false,
-          "primary_key": true,
-          "autoincrement": true,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": null
-        },
-        {
-          "name": "brand",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Марка."
-        },
-        {
-          "name": "model",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Модель."
-        },
-        {
-          "name": "license_plate",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Державний номер, унікальний у межах своєї таблиці."
-        },
-        {
-          "name": "company_id",
-          "type": {
-            "generic": "INTEGER",
-            "sqlite": "INTEGER",
-            "postgresql": "INTEGER"
-          },
-          "python_type": "int",
-          "nullable": true,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": "company.id",
-          "description": "Компанія-власник. Nullable — так задано у вихідній схемі."
-        }
-      ],
-      "unique_constraints": [
-        [
-          "license_plate"
-        ]
-      ],
-      "foreign_keys": [
-        {
+          "name": "ix_vehicles_owner_company_id",
           "columns": [
-            "company_id"
+            "owner_company_id"
           ],
-          "references": [
-            "company.id"
+          "unique": false
+        },
+        {
+          "name": "ix_vehicles_type",
+          "columns": [
+            "type"
           ],
-          "on_delete": null,
-          "on_update": null
+          "unique": false
         }
-      ],
-      "indexes": []
+      ]
     },
     "trips": {
       "description": "Рейс — заявка на перевезення за однією ТТН.",
@@ -1320,6 +1222,24 @@
           "description": "Telegram id логіста (копія employees.tg_id) — щоб із заявки можна було написати."
         },
         {
+          "name": "truck_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "vehicles.id",
+          "description": "Тягач із довідника, якщо його обрали зі списку. Порожній — введений вручну."
+        },
+        {
           "name": "truck",
           "type": {
             "generic": "TEXT",
@@ -1335,7 +1255,7 @@
           "on_update": null,
           "unique": false,
           "references": null,
-          "description": "Тягач: марка й модель, вводить логіст."
+          "description": "Тягач: марка й модель."
         },
         {
           "name": "truck_license_plate",
@@ -1356,6 +1276,24 @@
           "description": "Державний номер тягача."
         },
         {
+          "name": "trailer_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "vehicles.id",
+          "description": "Причіп із довідника, якщо його обрали зі списку."
+        },
+        {
           "name": "trailer",
           "type": {
             "generic": "TEXT",
@@ -1371,7 +1309,7 @@
           "on_update": null,
           "unique": false,
           "references": null,
-          "description": "Причіп: марка й модель, вводить логіст."
+          "description": "Причіп: марка й модель."
         },
         {
           "name": "trailer_type",
@@ -1389,7 +1327,7 @@
           "on_update": null,
           "unique": false,
           "references": null,
-          "description": "Тип причепа (зерновоз, самоскид тощо)."
+          "description": "Вид причепа (зерновоз, самоскид тощо). При виборі з довідника береться з vehicles.type — це властивість причепа, не рейсу."
         },
         {
           "name": "trailer_license_plate",
@@ -1784,6 +1722,26 @@
           ],
           "references": [
             "company.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
+            "trailer_id"
+          ],
+          "references": [
+            "vehicles.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
+            "truck_id"
+          ],
+          "references": [
+            "vehicles.id"
           ],
           "on_delete": null,
           "on_update": null

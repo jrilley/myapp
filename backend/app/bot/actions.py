@@ -164,7 +164,7 @@ async def render_company_vehicles(
     is_main_admin: bool = False,
 ) -> Rendered | None:
     """None — якщо тип транспорту невідомий."""
-    if repository.vehicle_model(kind) is None:
+    if kind not in repository.VEHICLE_KINDS:
         return None
 
     vehicles, total = await repository.list_company_vehicles(

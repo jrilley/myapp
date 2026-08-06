@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.models import Company, Employee, Position, Role, Trailer, Truck
+from app.models import Company, Employee, Position, Role, Vehicle
 
 
 async def _fixtures(session):
@@ -127,38 +127,36 @@ async def test_position_is_just_a_name(session):
     assert position.id is not None
 
 
-@pytest.mark.parametrize("model", [Truck, Trailer])
-async def test_vehicle_belongs_to_a_company(session, model):
+async def test_vehicle_belongs_to_a_company(session):
     company, _, _ = await _fixtures(session)
 
-    vehicle = model(
-        brand="Renault", model="Magnum", license_plate="AA1234BB", company_id=company.id
+    vehicle = Vehicle(
+        type="Тягач", make_model="Renault Magnum",
+        license_plate="AA1234BB", owner_company_id=company.id,
     )
     session.add(vehicle)
     await session.commit()
 
     loaded = await session.scalar(
-        select(model).options(selectinload(model.company))
+        select(Vehicle).options(selectinload(Vehicle.owner_company))
     )
-    assert loaded.company.name == "ТОВ Ромашка"
+    assert loaded.owner_company.name == "ТОВ Ромашка"
 
 
-@pytest.mark.parametrize("model", [Truck, Trailer])
-async def test_vehicle_company_is_optional(session, model):
-    """У вихідній схемі company_id без NOT NULL — техніка може бути
-    не прив'язана до компанії."""
-    vehicle = model(brand="DAF", model="XF", license_plate="BC5678CD")
+async def test_vehicle_company_is_optional(session):
+    """Власника могли не вказати — техніка від цього не перестає існувати."""
+    vehicle = Vehicle(type="Тягач", make_model="DAF XF", license_plate="BC5678CD")
     session.add(vehicle)
     await session.commit()
 
     assert vehicle.id is not None
-    assert vehicle.company_id is None
+    assert vehicle.owner_company_id is None
 
 
-@pytest.mark.parametrize("model", [Truck, Trailer])
-async def test_vehicle_company_must_exist(session, model):
-    vehicle = model(
-        brand="Scania", model="R450", license_plate="CD9012DE", company_id=9999
+async def test_vehicle_company_must_exist(session):
+    vehicle = Vehicle(
+        type="Тягач", make_model="Scania R450",
+        license_plate="CD9012DE", owner_company_id=9999,
     )
     session.add(vehicle)
 
@@ -166,55 +164,51 @@ async def test_vehicle_company_must_exist(session, model):
         await session.commit()
 
 
-@pytest.mark.parametrize("model", [Truck, Trailer])
-async def test_license_plate_is_unique(session, model):
-    session.add(model(brand="Volvo", model="FH", license_plate="AA1111AA"))
+async def test_license_plate_is_unique(session):
+    """Номер унікальний на весь довідник, а не в межах виду: доки таблиць
+    було дві, тягач і причіп могли мати один номер — а це та сама машина
+    двічі, і в рейсі вони б переплутались."""
+    session.add(Vehicle(type="Тягач", make_model="Volvo FH", license_plate="AA1111AA"))
     await session.commit()
 
-    session.add(model(brand="Scania", model="R450", license_plate="AA1111AA"))
+    session.add(
+        Vehicle(type="Зерновоз", make_model="Schmitz SKO", license_plate="AA1111AA")
+    )
     with pytest.raises(IntegrityError):
         await session.commit()
 
 
-async def test_truck_and_trailer_may_share_a_plate(session):
-    """Обмеження діє в межах своєї таблиці: тягач і причіп — різні
-    реєстри, збіг номера між ними не є конфліктом."""
-    session.add(Truck(brand="Volvo", model="FH", license_plate="AA2222AA"))
-    session.add(Trailer(brand="Schmitz", model="SKO", license_plate="AA2222AA"))
-
-    await session.commit()
-
-    assert await session.scalar(select(Truck.id)) is not None
-    assert await session.scalar(select(Trailer.id)) is not None
+def test_a_tractor_is_one_kind_the_rest_are_trailers():
+    """«Тягач чи причіп» не колонка, а наслідок виду."""
+    assert Vehicle(type="Тягач", make_model="x", license_plate="y").is_tractor
+    assert not Vehicle(type="Зерновоз", make_model="x", license_plate="y").is_tractor
 
 
-@pytest.mark.parametrize("model", [Truck, Trailer])
-@pytest.mark.parametrize("missing", ["brand", "model", "license_plate"])
-async def test_vehicle_required_fields(session, model, missing):
-    values = {"brand": "MAN", "model": "TGX", "license_plate": "DE3456EF"}
+@pytest.mark.parametrize("missing", ["type", "make_model", "license_plate"])
+async def test_vehicle_required_fields(session, missing):
+    values = {"type": "Тягач", "make_model": "MAN TGX", "license_plate": "DE3456EF"}
     values.pop(missing)
-    session.add(model(**values))
+    session.add(Vehicle(**values))
 
     with pytest.raises(IntegrityError):
         await session.commit()
 
 
-async def test_trucks_and_trailers_are_separate_tables(session):
-    """Спільний міксин не має злити їх в одну таблицю."""
+async def test_a_company_owns_its_vehicles(session):
+    """Одна таблиця на тягачі й причепи, один зв'язок від компанії."""
     company, _, _ = await _fixtures(session)
-    session.add(Truck(brand="Volvo", model="FH", license_plate="AA0001AA",
-                      company_id=company.id))
-    session.add(Trailer(brand="Schmitz", model="SKO", license_plate="AA0002AA",
-                        company_id=company.id))
+    session.add(Vehicle(type="Тягач", make_model="Volvo FH",
+                        license_plate="AA0001AA", owner_company_id=company.id))
+    session.add(Vehicle(type="Зерновоз", make_model="Schmitz SKO",
+                        license_plate="AA0002AA", owner_company_id=company.id))
     await session.commit()
 
     loaded = await session.scalar(
-        select(Company).options(
-            selectinload(Company.trucks), selectinload(Company.trailers)
-        )
+        select(Company).options(selectinload(Company.vehicles))
     )
-    assert [t.license_plate for t in loaded.trucks] == ["AA0001AA"]
-    assert [t.license_plate for t in loaded.trailers] == ["AA0002AA"]
+    assert sorted(v.license_plate for v in loaded.vehicles) == [
+        "AA0001AA", "AA0002AA"
+    ]
 
 
 async def test_tg_id_survives_a_real_telegram_id(session):

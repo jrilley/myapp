@@ -19,7 +19,7 @@ from app.bot.access import (
 )
 from app.bot.handlers.management import on_company_card, on_company_employees
 from app.bot.handlers.vehicles import (
-    edit_brand,
+    edit_make_model,
     edit_plate,
     on_company_vehicles,
     on_my_vehicles,
@@ -37,7 +37,7 @@ from app.bot.keyboards import (
     VEHICLE_LIST_PREFIX,
 )
 from app.bot.states import VehicleEdit
-from app.models import Company, Employee, Position, Role, Trailer, Truck
+from app.models import Company, Employee, Position, Role, Vehicle
 from tests.conftest import (
     ADMIN_ID,
     OWNER_ID,
@@ -73,9 +73,12 @@ async def two_companies(session):
     await session.commit()
 
     session.add_all([
-        Truck(brand="Volvo", model="FH", license_plate="AA1111AA", company_id=ours.id),
-        Truck(brand="Scania", model="R450", license_plate="BB2222BB", company_id=theirs.id),
-        Trailer(brand="Schmitz", model="SKO", license_plate="CC3333CC", company_id=ours.id),
+        Vehicle(type="Тягач", make_model="Volvo FH",
+                license_plate="AA1111AA", owner_company_id=ours.id),
+        Vehicle(type="Тягач", make_model="Scania R450",
+                license_plate="BB2222BB", owner_company_id=theirs.id),
+        Vehicle(type="Зерновоз", make_model="Schmitz SKO",
+                license_plate="CC3333CC", owner_company_id=ours.id),
     ])
     await repository.create_employee(
         session, tg_id=OWNER_ID, company_id=ours.id, fullname="Наш Працівник",
@@ -135,8 +138,8 @@ async def test_vehicle_list_is_scoped_to_the_company(
     labels = [
         b.text for row in callback.message.markups[0].inline_keyboard for b in row
     ]
-    assert "Volvo - AA1111AA" in labels
-    assert "Scania - BB2222BB" not in labels  # чужа машина
+    assert "Тягач · Volvo FH - AA1111AA" in labels
+    assert "Тягач · Scania R450 - BB2222BB" not in labels  # чужа машина
 
 
 async def test_employee_button_shows_position_and_name(
@@ -165,8 +168,8 @@ async def test_trailers_are_listed_separately(
     labels = [
         b.text for row in callback.message.markups[0].inline_keyboard for b in row
     ]
-    assert "Schmitz - CC3333CC" in labels
-    assert "Volvo - AA1111AA" not in labels
+    assert "Зерновоз · Schmitz SKO - CC3333CC" in labels
+    assert "Тягач · Volvo FH - AA1111AA" not in labels
 
 
 # ---------------------------------------------------------------------------
@@ -188,8 +191,8 @@ async def test_company_admin_sees_only_own_vehicles(
     labels = [
         b.text for row in callback.message.markups[0].inline_keyboard for b in row
     ]
-    assert "Volvo - AA1111AA" in labels
-    assert "Scania - BB2222BB" not in labels
+    assert "Тягач · Volvo FH - AA1111AA" in labels
+    assert "Тягач · Scania R450 - BB2222BB" not in labels
 
 
 async def test_company_admin_sees_only_own_employees(
@@ -212,9 +215,9 @@ async def test_company_admin_sees_only_own_employees(
 async def test_company_admin_cannot_open_a_foreign_vehicle(
     session, state, company_admin, two_companies
 ):
-    foreign = await repository.get_vehicle_by_plate(session, "truck", "BB2222BB")
+    foreign = await repository.get_vehicle_by_plate(session, "BB2222BB")
     callback = FakeCallback(
-        f"{VEHICLE_CARD_PREFIX}:truck:{foreign.id}", user=FakeUser(OWNER_ID)
+        f"{VEHICLE_CARD_PREFIX}:{foreign.id}", user=FakeUser(OWNER_ID)
     )
 
     await on_vehicle_card(callback, state, session, company_admin)
@@ -255,8 +258,8 @@ async def test_company_card_shows_only_your_own(
 
 
 async def test_vehicle_card_shows_details(session, state, access_admin, two_companies):
-    truck = await repository.get_vehicle_by_plate(session, "truck", "AA1111AA")
-    callback = FakeCallback(f"{VEHICLE_CARD_PREFIX}:truck:{truck.id}")
+    truck = await repository.get_vehicle_by_plate(session, "AA1111AA")
+    callback = FakeCallback(f"{VEHICLE_CARD_PREFIX}:{truck.id}")
 
     await on_vehicle_card(callback, state, session, access_admin)
 
@@ -265,25 +268,25 @@ async def test_vehicle_card_shows_details(session, state, access_admin, two_comp
     assert "Alebor IT" in text
 
 
-async def test_editing_brand_updates_the_row(
+async def test_editing_make_model_updates_the_row(
     session, state, access_admin, two_companies
 ):
-    truck = await repository.get_vehicle_by_plate(session, "truck", "AA1111AA")
-    callback = FakeCallback(f"{VEHICLE_EDIT_PREFIX}:brand:truck:{truck.id}")
+    truck = await repository.get_vehicle_by_plate(session, "AA1111AA")
+    callback = FakeCallback(f"{VEHICLE_EDIT_PREFIX}:makemodel:{truck.id}")
     await on_vehicle_edit(callback, state, session, access_admin)
-    assert await state.get_state() == VehicleEdit.brand
+    assert await state.get_state() == VehicleEdit.make_model
 
-    await edit_brand(FakeMessage("Renault"), state, session, access_admin)
+    await edit_make_model(FakeMessage("Renault Magnum"), state, session, access_admin)
 
-    updated = await repository.get_vehicle(session, "truck", truck.id)
-    assert updated.brand == "Renault"
+    updated = await repository.get_vehicle(session, truck.id)
+    assert updated.make_model == "Renault Magnum"
     assert await state.get_state() is None
 
 
 async def test_editing_plate_rejects_a_taken_number(
     session, state, access_admin, two_companies
 ):
-    truck = await repository.get_vehicle_by_plate(session, "truck", "AA1111AA")
+    truck = await repository.get_vehicle_by_plate(session, "AA1111AA")
     await state.set_state(VehicleEdit.license_plate)
     await state.update_data(kind="truck", vehicle_id=truck.id)
     message = FakeMessage("BB2222BB")  # номер іншого тягача
@@ -298,13 +301,13 @@ async def test_keeping_own_plate_is_not_a_conflict(
     session, state, access_admin, two_companies
 ):
     """Збереження власного номера без змін не має вважатись дублікатом."""
-    truck = await repository.get_vehicle_by_plate(session, "truck", "AA1111AA")
+    truck = await repository.get_vehicle_by_plate(session, "AA1111AA")
     await state.set_state(VehicleEdit.license_plate)
     await state.update_data(kind="truck", vehicle_id=truck.id)
 
     await edit_plate(FakeMessage("aa1111aa"), state, session, access_admin)
 
-    updated = await repository.get_vehicle(session, "truck", truck.id)
+    updated = await repository.get_vehicle(session, truck.id)
     assert updated.license_plate == "AA1111AA"
     assert await state.get_state() is None
 
@@ -312,14 +315,14 @@ async def test_keeping_own_plate_is_not_a_conflict(
 async def test_company_admin_can_edit_own_vehicle(
     session, state, company_admin, two_companies
 ):
-    truck = await repository.get_vehicle_by_plate(session, "truck", "AA1111AA")
+    truck = await repository.get_vehicle_by_plate(session, "AA1111AA")
     callback = FakeCallback(
-        f"{VEHICLE_EDIT_PREFIX}:model:truck:{truck.id}", user=FakeUser(OWNER_ID)
+        f"{VEHICLE_EDIT_PREFIX}:makemodel:{truck.id}", user=FakeUser(OWNER_ID)
     )
 
     await on_vehicle_edit(callback, state, session, company_admin)
 
-    assert await state.get_state() == VehicleEdit.model
+    assert await state.get_state() == VehicleEdit.make_model
 
 
 async def test_ordinary_user_cannot_browse_vehicles(session, state, access):

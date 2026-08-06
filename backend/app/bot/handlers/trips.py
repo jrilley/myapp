@@ -16,6 +16,7 @@ from datetime import date, datetime
 from html import escape
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +71,8 @@ from app.bot.keyboards import (
     TRIP_REDO_PREFIX,
     TRIP_SHOW_PREFIX,
     TRIP_STATUS_PREFIX,
+    TRIP_VEHICLE_MANUAL,
+    TRIP_VEHICLE_PREFIX,
     after_trip_keyboard,
     calendar_keyboard,
     cancel_keyboard,
@@ -84,10 +87,11 @@ from app.bot.keyboards import (
     trip_redo_keyboard,
     trip_status_keyboard,
     trip_step_keyboard,
+    trip_vehicle_keyboard,
 )
 from app.bot.publisher import Publisher
 from app.bot.states import TripEdit, TripForm
-from app.models import TRIP_STATUSES, Trip
+from app.models import TRIP_STATUSES, Trip, Vehicle
 
 router = Router(name="trips")
 
@@ -107,11 +111,11 @@ TRIP_FIELDS: dict[str, tuple[str, str, str]] = {
     "ttn": ("ttn_num", "Номер ТТН", "ttn"),
     "date": ("arrival_date", "Дата прибуття", "date"),
     "exp": ("exporter_company_id", "Експортер", "company"),
-    "truck": ("truck", "Тягач", "text"),
-    "tplate": ("truck_license_plate", "Номер тягача", "plate"),
-    "trailer": ("trailer", "Причіп", "text"),
-    "ttype": ("trailer_type", "Тип причепа", "text"),
-    "rplate": ("trailer_license_plate", "Номер причепа", "plate"),
+    # Тягач і причіп — не текст, а вибір із довідника: марка, номер і вид
+    # причепа приходять разом із машиною. Окремих полів під номер тут немає
+    # навмисно — правка номера поодинці розійшлася б із самим записом.
+    "truck": ("truck_id", "Тягач", "vehicle"),
+    "trailer": ("trailer_id", "Причіп", "vehicle"),
     "grain": ("grain_type", "Культура", "text"),
     # Водій — не підпис, а призначення: разом із ПІБ і телефоном міняється
     # driver_id, інакше рейс лишився б за попередньою людиною.
@@ -310,10 +314,36 @@ async def _ask_trip_exporter(
     await _ask_exporter(message, state, session, TripForm.exporter)
 
 
+async def _ask_vehicle(
+    message: Message, state: FSMContext, session: AsyncSession, kind: str
+) -> None:
+    """Транспорт із довідника компанії. Порожній список не тупик: ручний
+    ввід поруч — рейс може виконувати й чужа машина."""
+    data = await state.get_data()
+    vehicles = await repository.list_vehicles_for_pick(
+        session, kind, data["owner_company_id"]
+    )
+    await state.set_state(
+        TripForm.truck if kind == "truck" else TripForm.trailer
+    )
+    what = "тягач" if kind == "truck" else "причіп"
+    await message.answer(
+        f"Оберіть {what}:" if vehicles
+        else f"У довіднику компанії немає жодного: {what} доведеться ввести вручну.",
+        reply_markup=trip_vehicle_keyboard(kind, vehicles),
+    )
+
+
 async def _ask_truck(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
-    await state.set_state(TripForm.truck)
+    await _ask_vehicle(message, state, session, "truck")
+
+
+async def _ask_truck_manual(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.truck_manual)
     await message.answer("Тягач — марка й модель:", reply_markup=trip_step_keyboard())
 
 
@@ -329,7 +359,13 @@ async def _ask_truck_plate(
 async def _ask_trailer(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
-    await state.set_state(TripForm.trailer)
+    await _ask_vehicle(message, state, session, "trailer")
+
+
+async def _ask_trailer_manual(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.set_state(TripForm.trailer_manual)
     await message.answer("Причіп — марка й модель:", reply_markup=trip_step_keyboard())
 
 
@@ -338,7 +374,7 @@ async def _ask_trailer_type(
 ) -> None:
     await state.set_state(TripForm.trailer_type)
     await message.answer(
-        "Тип причепа — оберіть або введіть свій:",
+        "Вид причепа — оберіть або введіть свій:",
         reply_markup=trip_choice_keyboard("ttype", back=True),
     )
 
@@ -350,6 +386,28 @@ async def _ask_trailer_plate(
     await message.answer(
         "Державний номер причепа:", reply_markup=trip_step_keyboard()
     )
+
+
+async def _back_to_truck(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    """Куди веде «Назад» з причепа: на вибір тягача, якщо його брали з
+    довідника, або на його номер, якщо вводили руками."""
+    data = await state.get_data()
+    if data.get("truck_id") is None:
+        await _ask_truck_plate(message, state, session)
+        return
+    await _ask_truck(message, state, session)
+
+
+async def _back_to_trailer(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    data = await state.get_data()
+    if data.get("trailer_id") is None:
+        await _ask_trailer_plate(message, state, session)
+        return
+    await _ask_trailer(message, state, session)
 
 
 async def _ask_grain(
@@ -416,11 +474,13 @@ BACK_TO = {
     TripForm.client_name.state: _ask_client,
     TripForm.exporter.state: _ask_client,
     TripForm.truck.state: _ask_trip_exporter,
-    TripForm.truck_plate.state: _ask_truck,
-    TripForm.trailer.state: _ask_truck_plate,
-    TripForm.trailer_type.state: _ask_trailer,
+    TripForm.truck_manual.state: _ask_truck,
+    TripForm.truck_plate.state: _ask_truck_manual,
+    TripForm.trailer.state: _back_to_truck,
+    TripForm.trailer_manual.state: _ask_trailer,
+    TripForm.trailer_type.state: _ask_trailer_manual,
     TripForm.trailer_plate.state: _ask_trailer_type,
-    TripForm.grain.state: _ask_trailer_plate,
+    TripForm.grain.state: _back_to_trailer,
     TripForm.driver.state: _ask_grain,
     TripForm.driver_name.state: _ask_driver,
     TripForm.driver_phone.state: _ask_driver_name,
@@ -434,11 +494,11 @@ REDO_STEPS = {
     "date": ("Дата прибуття", _ask_arrival_date),
     "client": ("Замовник", _ask_client),
     "exp": ("Експортер", _ask_trip_exporter),
+    # Тягач і причіп ведуть на свій крок цілком: обрати машину з довідника —
+    # це і марка, і номер, і вид причепа разом, а правити їх поодинці означало
+    # б розсинхронити їх із самим записом.
     "truck": ("Тягач", _ask_truck),
-    "tplate": ("Номер тягача", _ask_truck_plate),
     "trailer": ("Причіп", _ask_trailer),
-    "ttype": ("Тип причепа", _ask_trailer_type),
-    "rplate": ("Номер причепа", _ask_trailer_plate),
     "grain": ("Культура", _ask_grain),
     "driver": ("Водій", _ask_driver),
 }
@@ -670,7 +730,64 @@ def _short_text(value: str) -> str | None:
     return None
 
 
-@router.message(TripForm.truck, F.text)
+async def _picked_vehicle(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext, kind: str
+) -> Vehicle | None:
+    """Машина з callback_data — з перевіркою, що вона тієї компанії й того
+    виду. Id приходить ззовні, тож і те, і те звіряємо заново."""
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[3].isdigit():
+        await callback.answer("Невідомий транспорт", show_alert=True)
+        return None
+    vehicle = await repository.get_vehicle(session, int(parts[3]))
+    data = await state.get_data()
+    if (
+        vehicle is None
+        or vehicle.owner_company_id != data["owner_company_id"]
+        or vehicle.is_tractor != (kind == "truck")
+    ):
+        await callback.answer("Невідомий транспорт", show_alert=True)
+        return None
+    return vehicle
+
+
+@router.callback_query(
+    TripForm.truck, F.data.startswith(f"{TRIP_VEHICLE_MANUAL}:")
+)
+async def step_truck_manual(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.update_data(truck_id=None)
+    await callback.answer()
+    if callback.message is not None:
+        await _ask_truck_manual(callback.message, state, session)
+
+
+@router.callback_query(TripForm.truck, F.data.startswith(f"{TRIP_VEHICLE_PREFIX}:"))
+async def step_truck_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    """Тягач із довідника: марка й номер підставляються разом із ним, тож
+    двох кроків набирання просто немає.
+
+    Марку з номером копіюємо в рейс, а не лишаємо саме посилання: рейс —
+    документ, і він має лишитись читабельним, якщо машину потім видалять
+    із довідника або перепишуть їй номер.
+    """
+    vehicle = await _picked_vehicle(callback, session, state, "truck")
+    if vehicle is None:
+        return
+    await state.update_data(
+        truck_id=vehicle.id,
+        truck=vehicle.make_model,
+        truck_license_plate=vehicle.license_plate,
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await _advance(callback.message, state, session, _ask_trailer)
+
+
+@router.message(TripForm.truck_manual, F.text)
 async def step_truck(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
@@ -705,7 +822,47 @@ async def step_truck_plate(
     await _advance(message, state, session, _ask_trailer)
 
 
-@router.message(TripForm.trailer, F.text)
+@router.callback_query(
+    TripForm.trailer, F.data.startswith(f"{TRIP_VEHICLE_MANUAL}:")
+)
+async def step_trailer_manual(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    await state.update_data(trailer_id=None)
+    await callback.answer()
+    if callback.message is not None:
+        await _ask_trailer_manual(callback.message, state, session)
+
+
+@router.callback_query(TripForm.trailer, F.data.startswith(f"{TRIP_VEHICLE_PREFIX}:"))
+async def step_trailer_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    """Причіп із довідника підставляє ще й вид: він властивість причепа, а
+    не рейсу, — тому окремого кроку «вид причепа» тут немає."""
+    vehicle = await _picked_vehicle(callback, session, state, "trailer")
+    if vehicle is None:
+        return
+
+    data = await state.get_data()
+    if vehicle.license_plate == data.get("truck_license_plate"):
+        await callback.answer(
+            "Це номер тягача цього ж рейсу.", show_alert=True
+        )
+        return
+
+    await state.update_data(
+        trailer_id=vehicle.id,
+        trailer=vehicle.make_model,
+        trailer_type=vehicle.type,
+        trailer_license_plate=vehicle.license_plate,
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await _advance(callback.message, state, session, _ask_grain)
+
+
+@router.message(TripForm.trailer_manual, F.text)
 async def step_trailer(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
@@ -737,7 +894,7 @@ async def step_trailer_type_pick(
 async def step_trailer_type(
     message: Message, state: FSMContext, session: AsyncSession
 ) -> None:
-    """Кнопки — підказка, а не обмеження: типів причепів більше, ніж
+    """Кнопки — підказка, а не обмеження: видів причепів більше, ніж
     поміститься в перелік, тож набраний текст приймається так само."""
     value = (message.text or "").strip()
     if error := _short_text(value):
@@ -891,9 +1048,9 @@ TRIP_COLUMNS = (
     "ttn_num", "arrival_date", "owner_company_id", "client_company_id",
     "client_company_name", "exporter_company_id",
     "created_by", "logist_fullname", "logist_phone_number", "logist_tg",
-    "truck", "truck_license_plate", "trailer", "trailer_type",
-    "trailer_license_plate", "grain_type", "driver_id", "driver_fullname",
-    "driver_phone_number",
+    "truck_id", "truck", "truck_license_plate",
+    "trailer_id", "trailer", "trailer_type", "trailer_license_plate",
+    "grain_type", "driver_id", "driver_fullname", "driver_phone_number",
 )
 
 
@@ -1112,6 +1269,18 @@ async def on_trip_field(
         await state.set_state(TripEdit.status)
         await callback.message.answer(
             "Новий статус:", reply_markup=trip_status_keyboard(trip.status)
+        )
+        return
+    if kind == "vehicle":
+        await state.set_state(
+            TripEdit.truck if key == "truck" else TripEdit.trailer
+        )
+        vehicles = await repository.list_vehicles_for_pick(
+            session, key, trip.owner_company_id
+        )
+        await callback.message.answer(
+            f"Новий {'тягач' if key == 'truck' else 'причіп'}:",
+            reply_markup=trip_vehicle_keyboard(key, vehicles),
         )
         return
     if kind == "driver":
@@ -1472,6 +1641,199 @@ async def edit_status(
 
 
 # ---------------------------------------------------------------------------
+# Зміна транспорту
+# ---------------------------------------------------------------------------
+#
+# Дзеркало кроків анкети, але з однією відмінністю: тут одна правка міняє
+# кілька колонок одразу — id, марку, номер, а для причепа ще й вид. Інакше
+# посилання на довідник розійшлося б із копією в самому рейсі.
+
+
+def _edit_kind(state_name: str | None) -> str:
+    """Що саме редагуємо — тягач чи причіп."""
+    return "truck" if state_name == TripEdit.truck.state else "trailer"
+
+
+def _vehicle_values(kind: str, vehicle: Vehicle | None, **manual) -> dict:
+    """Колонки рейсу для однієї машини: з довідника або з ручного вводу."""
+    if kind == "truck":
+        return {
+            "truck_id": vehicle.id if vehicle else None,
+            "truck": vehicle.make_model if vehicle else manual["name"],
+            "truck_license_plate": (
+                vehicle.license_plate if vehicle else manual["plate"]
+            ),
+        }
+    return {
+        "trailer_id": vehicle.id if vehicle else None,
+        "trailer": vehicle.make_model if vehicle else manual["name"],
+        "trailer_type": vehicle.type if vehicle else manual["type"],
+        "trailer_license_plate": vehicle.license_plate if vehicle else manual["plate"],
+    }
+
+
+def _clashes(kind: str, trip: Trip, plate: str) -> bool:
+    """Номери тягача й причепа не можуть збігатися — це та сама машина."""
+    other = trip.trailer_license_plate if kind == "truck" else trip.truck_license_plate
+    return plate == other
+
+
+@router.callback_query(
+    StateFilter(TripEdit.truck, TripEdit.trailer),
+    F.data.startswith(f"{TRIP_VEHICLE_PREFIX}:"),
+)
+async def edit_vehicle_pick(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    access: Access,
+    publisher: Publisher,
+) -> None:
+    kind = _edit_kind(await state.get_state())
+    parts = (callback.data or "").split(":")
+    vehicle = (
+        await repository.get_vehicle(session, int(parts[3]))
+        if len(parts) == 4 and parts[3].isdigit()
+        else None
+    )
+    await callback.answer()
+    if callback.message is None:
+        return
+    trip = await _editable_trip(callback.message, state, session, access)
+    if trip is None:
+        return
+
+    # Компанію й вид звіряємо заново: id приходить у callback_data.
+    if (
+        vehicle is None
+        or vehicle.owner_company_id != trip.owner_company_id
+        or vehicle.is_tractor != (kind == "truck")
+    ):
+        await state.clear()
+        await callback.message.answer("Невідомий транспорт.")
+        return
+    if _clashes(kind, trip, vehicle.license_plate):
+        await state.clear()
+        await callback.message.answer(
+            "Номери тягача й причепа не можуть збігатися."
+        )
+        return
+
+    await _apply(
+        callback.message, state, session, access, publisher, trip,
+        field=kind, **_vehicle_values(kind, vehicle),
+    )
+
+
+@router.callback_query(
+    StateFilter(TripEdit.truck, TripEdit.trailer),
+    F.data.startswith(f"{TRIP_VEHICLE_MANUAL}:"),
+)
+async def edit_vehicle_manual(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    await state.update_data(vehicle_kind=_edit_kind(await state.get_state()))
+    await state.set_state(TripEdit.vehicle_name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Марка й модель:", reply_markup=cancel_keyboard()
+        )
+
+
+@router.message(TripEdit.vehicle_name, F.text)
+async def edit_vehicle_name(
+    message: Message, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    value = (message.text or "").strip()
+    if error := _short_text(value):
+        await message.answer(error, reply_markup=cancel_keyboard())
+        return
+    if await _editable_trip(message, state, session, access) is None:
+        return
+
+    await state.update_data(vehicle_name=value)
+    data = await state.get_data()
+    if data.get("vehicle_kind") == "truck":
+        await state.set_state(TripEdit.vehicle_plate)
+        await message.answer("Державний номер:", reply_markup=cancel_keyboard())
+        return
+    await state.set_state(TripEdit.vehicle_type)
+    await message.answer(
+        "Вид причепа — оберіть або введіть свій:",
+        reply_markup=trip_choice_keyboard("ttype"),
+    )
+
+
+async def _ask_vehicle_plate(message: Message, state: FSMContext) -> None:
+    await state.set_state(TripEdit.vehicle_plate)
+    await message.answer("Державний номер:", reply_markup=cancel_keyboard())
+
+
+@router.callback_query(
+    TripEdit.vehicle_type, F.data.startswith(f"{TRIP_CHOICE_PREFIX}:")
+)
+async def edit_vehicle_type_pick(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    value = _choice(callback.data, "ttype")
+    if value is None:
+        await callback.answer("Невідоме значення", show_alert=True)
+        return
+    await state.update_data(vehicle_type=value)
+    await callback.answer()
+    if callback.message is not None:
+        await _ask_vehicle_plate(callback.message, state)
+
+
+@router.message(TripEdit.vehicle_type, F.text)
+async def edit_vehicle_type(message: Message, state: FSMContext) -> None:
+    value = (message.text or "").strip()
+    if error := _short_text(value):
+        await message.answer(error, reply_markup=trip_choice_keyboard("ttype"))
+        return
+    await state.update_data(vehicle_type=value)
+    await _ask_vehicle_plate(message, state)
+
+
+@router.message(TripEdit.vehicle_plate, F.text)
+async def edit_vehicle_plate(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    access: Access,
+    publisher: Publisher,
+) -> None:
+    value, error = _plate(message.text or "")
+    if error:
+        await message.answer(error, reply_markup=cancel_keyboard())
+        return
+    trip = await _editable_trip(message, state, session, access)
+    if trip is None:
+        return
+
+    data = await state.get_data()
+    kind = data.get("vehicle_kind", "truck")
+    if _clashes(kind, trip, value):
+        await message.answer(
+            "Номери тягача й причепа не можуть збігатися.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    await _apply(
+        message, state, session, access, publisher, trip,
+        field=kind,
+        **_vehicle_values(
+            kind, None,
+            name=data.get("vehicle_name", ""),
+            type=data.get("vehicle_type", ""),
+            plate=value,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Зміна водія
 # ---------------------------------------------------------------------------
 
@@ -1619,9 +1981,9 @@ async def on_trip_delete(
 
 @router.message(TripForm.ttn)
 @router.message(TripForm.client_name)
-@router.message(TripForm.truck)
+@router.message(TripForm.truck_manual)
 @router.message(TripForm.truck_plate)
-@router.message(TripForm.trailer)
+@router.message(TripForm.trailer_manual)
 @router.message(TripForm.trailer_type)
 @router.message(TripForm.trailer_plate)
 @router.message(TripForm.grain)
@@ -1630,6 +1992,8 @@ async def on_trip_delete(
 @router.message(TripEdit.value)
 @router.message(TripEdit.driver_name)
 @router.message(TripEdit.driver_phone)
+@router.message(TripEdit.vehicle_name)
+@router.message(TripEdit.vehicle_plate)
 async def non_text(message: Message) -> None:
     await message.answer(
         "Надішліть, будь ласка, текст.", reply_markup=cancel_keyboard()

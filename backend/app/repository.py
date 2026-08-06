@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import (
+    VEHICLE_TRACTOR,
     Application,
     ApplicationStatus,
     Company,
@@ -18,9 +19,8 @@ from app.models import (
     Position,
     Role,
     RolePermission,
-    Trailer,
     Trip,
-    Truck,
+    Vehicle,
 )
 
 
@@ -347,46 +347,44 @@ async def count_position_employees(session: AsyncSession, position_id: int) -> i
 # Транспорт
 # ---------------------------------------------------------------------------
 
-#: Тип транспорту → модель. Ключі збігаються з callback_data кнопок вибору.
-VEHICLE_MODELS: dict[str, type[Truck] | type[Trailer]] = {
-    "truck": Truck,
-    "trailer": Trailer,
-}
+#: Половини списку транспорту. Це не колонка й не тип: «тягач» — це рівно
+#: `type == VEHICLE_TRACTOR`, а «причіп» — усе інше. Ключі збігаються з
+#: callback_data кнопок вибору.
+VEHICLE_KINDS = ("truck", "trailer")
 
 
-def vehicle_model(kind: str) -> type[Truck] | type[Trailer] | None:
-    return VEHICLE_MODELS.get(kind)
+def _of_kind(kind: str):
+    """Умова відбору для однієї половини списку, або None для невідомого."""
+    if kind == "truck":
+        return Vehicle.type == VEHICLE_TRACTOR
+    if kind == "trailer":
+        return Vehicle.type != VEHICLE_TRACTOR
+    return None
 
 
 async def get_vehicle_by_plate(
-    session: AsyncSession, kind: str, license_plate: str
-) -> Truck | Trailer | None:
-    """Номер унікальний у межах своєї таблиці, тому шукаємо саме в ній."""
-    model = vehicle_model(kind)
-    if model is None:
-        return None
+    session: AsyncSession, license_plate: str
+) -> Vehicle | None:
+    """Номер унікальний на весь довідник: одна машина не може бути й тягачем,
+    і причепом, а номери в тягачів і причепів не перетинаються."""
     return await session.scalar(
-        select(model).where(model.license_plate == license_plate)
+        select(Vehicle).where(Vehicle.license_plate == license_plate)
     )
 
 
 async def create_vehicle(
     session: AsyncSession,
-    kind: str,
     *,
-    brand: str,
-    model: str,
+    type: str,
+    make_model: str,
     license_plate: str,
-    company_id: int | None,
-) -> Truck | Trailer:
-    vehicle_cls = vehicle_model(kind)
-    if vehicle_cls is None:
-        raise ValueError(f"Невідомий тип транспорту: {kind!r}")
-    vehicle = vehicle_cls(
-        brand=brand,
-        model=model,
+    owner_company_id: int | None,
+) -> Vehicle:
+    vehicle = Vehicle(
+        type=type,
+        make_model=make_model,
         license_plate=license_plate,
-        company_id=company_id,
+        owner_company_id=owner_company_id,
     )
     session.add(vehicle)
     await session.commit()
@@ -394,14 +392,11 @@ async def create_vehicle(
     return vehicle
 
 
-async def get_vehicle(
-    session: AsyncSession, kind: str, vehicle_id: int
-) -> Truck | Trailer | None:
-    model = vehicle_model(kind)
-    if model is None:
-        return None
+async def get_vehicle(session: AsyncSession, vehicle_id: int) -> Vehicle | None:
     return await session.scalar(
-        select(model).where(model.id == vehicle_id).options(selectinload(model.company))
+        select(Vehicle)
+        .where(Vehicle.id == vehicle_id)
+        .options(selectinload(Vehicle.owner_company))
     )
 
 
@@ -412,24 +407,36 @@ async def list_company_vehicles(
     *,
     limit: int = 10,
     offset: int = 0,
-) -> tuple[list[Truck | Trailer], int]:
-    model = vehicle_model(kind)
-    if model is None:
+) -> tuple[list[Vehicle], int]:
+    condition = _of_kind(kind)
+    if condition is None:
         return [], 0
+    filters = (Vehicle.owner_company_id == company_id, condition)
     total = await session.scalar(
-        select(func.count()).select_from(model).where(model.company_id == company_id)
+        select(func.count()).select_from(Vehicle).where(*filters)
     )
     stmt = (
-        select(model)
-        .where(model.company_id == company_id)
-        .order_by(model.brand, model.license_plate)
+        select(Vehicle)
+        .where(*filters)
+        .order_by(Vehicle.type, Vehicle.make_model, Vehicle.license_plate)
         .limit(limit)
         .offset(offset)
     )
     return list(await session.scalars(stmt)), int(total or 0)
 
 
-async def delete_vehicle(session: AsyncSession, vehicle: Truck | Trailer) -> None:
+async def list_vehicles_for_pick(
+    session: AsyncSession, kind: str, company_id: int, *, limit: int = 50
+) -> list[Vehicle]:
+    """Транспорт компанії для кнопок при створенні рейсу — без пагінації:
+    список короткий, а гортати його посеред анкети незручно."""
+    vehicles, _ = await list_company_vehicles(
+        session, kind, company_id, limit=limit, offset=0
+    )
+    return vehicles
+
+
+async def delete_vehicle(session: AsyncSession, vehicle: Vehicle) -> None:
     """Транспорт стирається назовсім, на відміну від рейсу.
 
     М'яке видалення тут нічого не дало б: історія перевезень зберігає марку
@@ -440,16 +447,13 @@ async def delete_vehicle(session: AsyncSession, vehicle: Truck | Trailer) -> Non
     await session.commit()
 
 
-async def update_vehicle(
-    session: AsyncSession, vehicle: Truck | Trailer, **fields
-) -> Truck | Trailer:
+async def update_vehicle(session: AsyncSession, vehicle: Vehicle, **fields) -> Vehicle:
     for name, value in fields.items():
         setattr(vehicle, name, value)
     await session.commit()
     vehicle_id = vehicle.id
-    kind = "truck" if isinstance(vehicle, Truck) else "trailer"
     session.expire(vehicle)
-    return await get_vehicle(session, kind, vehicle_id)
+    return await get_vehicle(session, vehicle_id)
 
 
 async def list_company_employees(

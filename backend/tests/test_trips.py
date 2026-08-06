@@ -28,11 +28,17 @@ from app.bot.handlers.common import on_page
 from app.bot.access import DENIED as NO_RIGHTS
 from app.bot.handlers.trips import (
     DENIED,
+    _ask_truck,
     edit_driver_manual,
     edit_driver_name,
     edit_driver_phone,
     edit_choice,
     edit_datetime_button,
+    edit_vehicle_manual,
+    edit_vehicle_name,
+    edit_vehicle_pick,
+    edit_vehicle_plate,
+    edit_vehicle_type,
     edit_driver_pick,
     edit_status,
     on_calendar_nav,
@@ -59,10 +65,14 @@ from app.bot.handlers.trips import (
     step_grain,
     step_grain_pick,
     step_trailer,
+    step_trailer_manual,
+    step_trailer_pick,
     step_trailer_plate,
     step_trailer_type,
     step_trailer_type_pick,
     step_truck,
+    step_truck_manual,
+    step_truck_pick,
     step_truck_plate,
     step_ttn,
 )
@@ -89,9 +99,18 @@ from app.bot.keyboards import (
     TRIP_REDO_PREFIX,
     TRIP_SHOW_PREFIX,
     TRIP_STATUS_PREFIX,
+    TRIP_VEHICLE_MANUAL,
+    TRIP_VEHICLE_PREFIX,
 )
 from app.bot.states import TripEdit, TripForm
-from app.models import TRIP_STATUS_NEW, TRIP_STATUSES, Company, Position, Role
+from app.models import (
+    TRIP_STATUS_NEW,
+    TRIP_STATUSES,
+    Company,
+    Position,
+    Role,
+    Vehicle,
+)
 from tests.conftest import (
     ADMIN_ID,
     OWNER_ID,
@@ -227,8 +246,12 @@ async def fill_form_until_driver(state, session, access, exporter_id, *, grain="
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
     )
+    await step_truck_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
     await step_truck(FakeMessage("Volvo FH16"), state, session)
     await step_truck_plate(FakeMessage("aa1111aa"), state, session)
+    await step_trailer_manual(
+        FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state, session
+    )
     await step_trailer(FakeMessage("Schmitz SKO24"), state, session)
     await step_trailer_type(FakeMessage("зерновоз"), state, session)
     await step_trailer_plate(FakeMessage("cc3333cc"), state, session)
@@ -264,8 +287,12 @@ async def fill_form(state, session, access, **overrides):
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
     )
+    await step_truck_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
     await step_truck(FakeMessage(steps["truck"]), state, session)
     await step_truck_plate(FakeMessage(steps["truck_plate"]), state, session)
+    await step_trailer_manual(
+        FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state, session
+    )
     await step_trailer(FakeMessage(steps["trailer"]), state, session)
     await step_trailer_type(FakeMessage(steps["trailer_type"]), state, session)
     await step_trailer_plate(FakeMessage(steps["trailer_plate"]), state, session)
@@ -790,13 +817,17 @@ async def test_editing_records_who_and_when(session, state, boss, trips, publish
 async def test_editing_a_plate_rejects_the_other_one(
     session, state, logist, trips, publisher
 ):
-    await _start_edit(session, state, logist, trips.mine.id, "rplate")
-    message = FakeMessage("AA1111AA")  # номер тягача цього ж рейсу
+    """Номери тягача й причепа не можуть збігатися: це та сама машина."""
+    await _start_edit(session, state, logist, trips.mine.id, "trailer")
+    await edit_vehicle_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state)
+    await edit_vehicle_name(FakeMessage("Schmitz"), state, session, logist)
+    await edit_vehicle_type(FakeMessage("Зерновоз"), state)
 
-    await edit_value(message, state, session, logist, publisher)
+    message = FakeMessage("AA1111AA")  # номер тягача цього ж рейсу
+    await edit_vehicle_plate(message, state, session, logist, publisher)
 
     assert "не можуть збігатися" in message.answers[0]
-    assert await state.get_state() == TripEdit.value
+    assert await state.get_state() == TripEdit.vehicle_plate
 
 
 async def test_mass_takes_only_whole_numbers(session, state, logist, trips, publisher):
@@ -1527,3 +1558,217 @@ async def test_an_unknown_redo_key_is_refused(session, state, world, logist):
 
     assert callback.answered == ["Невідоме поле"]
     assert await state.get_state() == TripForm.confirm
+
+
+# ---------------------------------------------------------------------------
+# Транспорт із довідника
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def fleet(session, world):
+    """Тягач і причіп нашої компанії плюс чужий тягач."""
+    tractor = Vehicle(
+        type="Тягач", make_model="Volvo FH16",
+        license_plate="AA5555AA", owner_company_id=world.ours.id,
+    )
+    trailer = Vehicle(
+        type="Зерновоз", make_model="Schmitz SKO24",
+        license_plate="CC7777CC", owner_company_id=world.ours.id,
+    )
+    foreign = Vehicle(
+        type="Тягач", make_model="Scania R450",
+        license_plate="ZZ9999ZZ", owner_company_id=world.theirs.id,
+    )
+    session.add_all([tractor, trailer, foreign])
+    await session.commit()
+    return SimpleNamespace(tractor=tractor, trailer=trailer, foreign=foreign)
+
+
+async def _upto_truck(state, session, access, world):
+    """Анкета до кроку вибору тягача."""
+    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, access)
+    await step_ttn(FakeMessage("ТТН-АВТО"), state, session)
+    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+    await step_client_pick(
+        FakeCallback(f"{TRIP_CLIENT_PREFIX}:{world.ours.id}"), state, session
+    )
+    return await step_exporter(
+        FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.ours.id}"), state, session
+    )
+
+
+def _pick(kind: str, vehicle) -> FakeCallback:
+    return FakeCallback(f"{TRIP_VEHICLE_PREFIX}:{kind}:{vehicle.id}")
+
+
+async def test_picking_a_truck_fills_make_and_plate(
+    session, state, world, logist, fleet
+):
+    """Два кроки набирання зникають: марка й номер приходять із машиною."""
+    await _upto_truck(state, session, logist, world)
+    assert await state.get_state() == TripForm.truck
+
+    await step_truck_pick(_pick("truck", fleet.tractor), state, session)
+
+    data = await state.get_data()
+    assert data["truck_id"] == fleet.tractor.id
+    assert data["truck"] == "Volvo FH16"
+    assert data["truck_license_plate"] == "AA5555AA"
+    # Далі одразу причіп, а не номер тягача.
+    assert await state.get_state() == TripForm.trailer
+
+
+async def test_picking_a_trailer_brings_its_kind(session, state, world, logist, fleet):
+    """Вид причепа більше не питається: він властивість причепа, і доки жив
+    у рейсі, «зерновоз» набирали заново для того самого причепа."""
+    await _upto_truck(state, session, logist, world)
+    await step_truck_pick(_pick("truck", fleet.tractor), state, session)
+
+    await step_trailer_pick(_pick("trailer", fleet.trailer), state, session)
+
+    data = await state.get_data()
+    assert data["trailer_id"] == fleet.trailer.id
+    assert data["trailer_type"] == "Зерновоз"
+    assert data["trailer_license_plate"] == "CC7777CC"
+    # Крок «вид причепа» пропущено — одразу культура.
+    assert await state.get_state() == TripForm.grain
+
+
+async def test_the_list_only_offers_your_own_fleet(
+    session, state, world, logist, fleet
+):
+    callback = await _upto_truck(state, session, logist, world)
+    del callback
+
+    message = FakeMessage()
+    await _ask_truck(message, state, session)
+
+    offered = callback_data(message.markups[-1])
+    assert f"{TRIP_VEHICLE_PREFIX}:truck:{fleet.tractor.id}" in offered
+    assert f"{TRIP_VEHICLE_PREFIX}:truck:{fleet.foreign.id}" not in offered
+    # Причепів у списку тягачів теж немає.
+    assert f"{TRIP_VEHICLE_PREFIX}:truck:{fleet.trailer.id}" not in offered
+
+
+async def test_a_foreign_vehicle_is_refused(session, state, world, logist, fleet):
+    """id приходить у callback_data — компанію звіряємо заново."""
+    await _upto_truck(state, session, logist, world)
+    callback = _pick("truck", fleet.foreign)
+
+    await step_truck_pick(callback, state, session)
+
+    assert callback.answered == ["Невідомий транспорт"]
+    assert "truck_id" not in await state.get_data()
+
+
+async def test_a_trailer_cannot_be_picked_as_a_truck(
+    session, state, world, logist, fleet
+):
+    """Вид звіряємо теж: причіп у графі тягача — зіпсований документ."""
+    await _upto_truck(state, session, logist, world)
+    callback = _pick("truck", fleet.trailer)
+
+    await step_truck_pick(callback, state, session)
+
+    assert callback.answered == ["Невідомий транспорт"]
+
+
+async def test_a_trailer_with_the_trucks_plate_is_refused(
+    session, state, world, logist, fleet
+):
+    """Той самий номер у тягача й причепа — це одна машина двічі.
+
+    У довіднику таке неможливо: номер там унікальний. А от тягача могли
+    ввести руками — і саме тоді збіг і трапляється.
+    """
+    await _upto_truck(state, session, logist, world)
+    await step_truck_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
+    await step_truck(FakeMessage("MAN TGX"), state, session)
+    await step_truck_plate(FakeMessage("cc7777cc"), state, session)  # номер причепа
+
+    callback = _pick("trailer", fleet.trailer)
+    await step_trailer_pick(callback, state, session)
+
+    assert callback.answered == ["Це номер тягача цього ж рейсу."]
+    assert "trailer_id" not in await state.get_data()
+
+
+async def test_a_trip_records_which_vehicles_it_used(
+    session, state, world, logist, fleet, publisher
+):
+    await _upto_truck(state, session, logist, world)
+    await step_truck_pick(_pick("truck", fleet.tractor), state, session)
+    await step_trailer_pick(_pick("trailer", fleet.trailer), state, session)
+    await step_grain(FakeMessage("Пшениця"), state, session)
+    await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state, session)
+    await step_driver_name(FakeMessage("Іван Водій"), state, session)
+    await step_driver_phone(FakeMessage("+380501112233"), state, session)
+
+    await step_confirm(
+        FakeCallback(TRIP_CONFIRM, user=FakeUser(OWNER_ID)),
+        state, session, publisher, logist,
+    )
+
+    trips, _ = await repository.list_trips(session)
+    assert trips[0].truck_id == fleet.tractor.id
+    assert trips[0].trailer_id == fleet.trailer.id
+    assert trips[0].trailer_type == "Зерновоз"
+
+
+async def test_a_manual_vehicle_leaves_no_link(session, state, world, logist, publisher):
+    """Чужа машина: посилання порожнє, а марка з номером на місці — рейс
+    документ, і він має лишитись читабельним."""
+    callback = await fill_form(state, session, logist, exporter_id=world.ours.id)
+    await step_confirm(callback, state, session, publisher, logist)
+
+    trips, _ = await repository.list_trips(session)
+    assert trips[0].truck_id is None
+    assert trips[0].trailer_id is None
+    assert trips[0].truck == "Volvo FH16"
+
+
+async def test_back_from_a_trailer_returns_to_the_truck_list(
+    session, state, world, logist, fleet
+):
+    """Тягач брали з довідника — «Назад» веде на його список, а не на номер,
+    якого ніхто не вводив."""
+    await _upto_truck(state, session, logist, world)
+    await step_truck_pick(_pick("truck", fleet.tractor), state, session)
+
+    await on_form_back(FakeCallback(TRIP_BACK), state, session)
+
+    assert await state.get_state() == TripForm.truck
+
+
+async def test_back_from_a_trailer_returns_to_the_plate_when_typed(
+    session, state, world, logist
+):
+    """А якщо тягач вводили руками — на його номер."""
+    await _upto_truck(state, session, logist, world)
+    await step_truck_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
+    await step_truck(FakeMessage("MAN TGX"), state, session)
+    await step_truck_plate(FakeMessage("BB2222BB"), state, session)
+
+    await on_form_back(FakeCallback(TRIP_BACK), state, session)
+
+    assert await state.get_state() == TripForm.truck_plate
+
+
+async def test_reassigning_a_truck_updates_link_and_copy(
+    session, state, world, logist, fleet, publisher
+):
+    """Правка тягача міняє посилання, марку й номер разом: інакше рейс
+    посилався б на одну машину, а показував іншу."""
+    trip = await make_trip(session, world.logist, world.ours)
+    await _start_edit(session, state, logist, trip.id, "truck")
+    assert await state.get_state() == TripEdit.truck
+
+    await edit_vehicle_pick(
+        _pick("truck", fleet.tractor), state, session, logist, publisher
+    )
+
+    updated = await repository.get_trip(session, trip.id)
+    assert updated.truck_id == fleet.tractor.id
+    assert updated.truck == "Volvo FH16"
+    assert updated.truck_license_plate == "AA5555AA"

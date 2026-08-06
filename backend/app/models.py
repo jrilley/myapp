@@ -14,7 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
@@ -152,8 +152,7 @@ class Company(Base):
     )
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="company")
-    trucks: Mapped[list["Truck"]] = relationship(back_populates="company")
-    trailers: Mapped[list["Trailer"]] = relationship(back_populates="company")
+    vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="owner_company")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Company id={self.id} name={self.name!r}>"
@@ -352,62 +351,80 @@ class Employee(Base):
 # ---------------------------------------------------------------------------
 
 
-class VehicleMixin:
-    """Спільні колонки truck і trailer.
+#: Види транспорту. Перший — тягач, решта — причепи: цим вони й
+#: розрізняються, окремої колонки «тягач чи причіп» не потрібно.
+#:
+#: Вид причепа — властивість самого причепа, а не рейсу. Доки він жив у
+#: `trips.trailer_type`, «зерновоз» набирали заново в кожному рейсі, включно
+#: з десятим рейсом того самого причепа.
+VEHICLE_TRACTOR = "Тягач"
+VEHICLE_TYPES = (
+    VEHICLE_TRACTOR,
+    "Зерновоз",
+    "Самоскид",
+    "Тент",
+    "Цистерна",
+    "Контейнеровоз",
+    #: Для причепа, вид якого невідомий або не має значення.
+    "Причіп",
+)
 
-    Таблиці однакові за структурою, тож тримаємо її в одному місці —
-    інакше при наступній зміні одна з них відстане від іншої.
+
+#: Види причепів — усе, крім тягача. Виводиться, а не переписується руками:
+#: інакше два переліки розійшлись би при першому ж новому виді.
+TRAILER_TYPES = tuple(t for t in VEHICLE_TYPES if t != VEHICLE_TRACTOR)
+
+
+def is_tractor(vehicle_type: str) -> bool:
+    return vehicle_type == VEHICLE_TRACTOR
+
+
+class Vehicle(Base):
+    """Тягач або причіп.
+
+    Одна таблиця на обидва, а не дві однакові: відрізняються вони лише
+    значенням `type`, і доки таблиць було дві, кожна зміна робилась двічі —
+    або не робилась удруге.
     """
 
+    __tablename__ = "vehicles"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    brand: Mapped[str] = mapped_column(Text, nullable=False, doc="Марка.")
-    model: Mapped[str] = mapped_column(Text, nullable=False, doc="Модель.")
-    license_plate: Mapped[str] = mapped_column(
+    type: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        doc="Державний номер, унікальний у межах своєї таблиці.",
+        index=True,
+        doc="Вид із VEHICLE_TYPES: «Тягач» або вид причепа («Зерновоз» тощо).",
+    )
+    make_model: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Марка й модель одним рядком, як їх називають."
+    )
+    license_plate: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True, doc="Державний номер, унікальний."
+    )
+    owner_company_id: Mapped[int | None] = mapped_column(
+        ForeignKey("company.id"),
+        index=True,
+        doc=(
+            "Компанія-власник. За нею працює обсяг доступу: у списку транспорту "
+            "видно машини своєї компанії. Nullable — власника могли не вказати."
+        ),
     )
 
-    @declared_attr
-    def __table_args__(cls) -> tuple:
+    owner_company: Mapped["Company | None"] = relationship(back_populates="vehicles")
+
+    __table_args__ = (
         # Ім'я задаємо явно: безіменне обмеження неможливо зняти в downgrade,
         # а в SQLite будь-яка зміна обмежень — це перебудова таблиці.
-        return (
-            UniqueConstraint(
-                "license_plate", name=f"uq_{cls.__tablename__}_license_plate"
-            ),
-        )
+        UniqueConstraint("license_plate", name="uq_vehicles_license_plate"),
+    )
 
-    @declared_attr
-    def company_id(cls) -> Mapped[int | None]:
-        # declared_attr обов'язковий: ForeignKey не можна ділити між класами,
-        # для кожної таблиці потрібен свій екземпляр.
-        return mapped_column(
-            ForeignKey("company.id"),
-            doc="Компанія-власник. Nullable — так задано у вихідній схемі.",
-        )
-
-
-class Truck(VehicleMixin, Base):
-    """Тягач."""
-
-    __tablename__ = "truck"
-
-    company: Mapped["Company | None"] = relationship(back_populates="trucks")
+    @property
+    def is_tractor(self) -> bool:
+        return is_tractor(self.type)
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<Truck id={self.id} plate={self.license_plate!r}>"
-
-
-class Trailer(VehicleMixin, Base):
-    """Причіп."""
-
-    __tablename__ = "trailer"
-
-    company: Mapped["Company | None"] = relationship(back_populates="trailers")
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return f"<Trailer id={self.id} plate={self.license_plate!r}>"
+        return f"<Vehicle id={self.id} type={self.type!r} plate={self.license_plate!r}>"
 
 
 # ---------------------------------------------------------------------------
@@ -507,12 +524,31 @@ class Trip(Base):
         doc="Telegram id логіста (копія employees.tg_id) — щоб із заявки можна було написати.",
     )
 
-    truck: Mapped[str] = mapped_column(Text, nullable=False, doc="Тягач: марка й модель, вводить логіст.")
+    # Транспорт обирають із довідника `vehicles`, але не завжди: рейс може
+    # виконувати чужа машина, якої там немає. Тому FK необов'язкові, а марка
+    # з номером — обов'язкові: вони і є документом. Та сама пара
+    # «зв'язок + копія», що й у водія з менеджером.
+    truck_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vehicles.id"),
+        doc="Тягач із довідника, якщо його обрали зі списку. Порожній — введений вручну.",
+    )
+    truck: Mapped[str] = mapped_column(Text, nullable=False, doc="Тягач: марка й модель.")
     truck_license_plate: Mapped[str] = mapped_column(
         Text, nullable=False, doc="Державний номер тягача."
     )
-    trailer: Mapped[str] = mapped_column(Text, nullable=False, doc="Причіп: марка й модель, вводить логіст.")
-    trailer_type: Mapped[str] = mapped_column(Text, nullable=False, doc="Тип причепа (зерновоз, самоскид тощо).")
+    trailer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vehicles.id"),
+        doc="Причіп із довідника, якщо його обрали зі списку.",
+    )
+    trailer: Mapped[str] = mapped_column(Text, nullable=False, doc="Причіп: марка й модель.")
+    trailer_type: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        doc=(
+            "Вид причепа (зерновоз, самоскид тощо). При виборі з довідника "
+            "береться з vehicles.type — це властивість причепа, не рейсу."
+        ),
+    )
     trailer_license_plate: Mapped[str] = mapped_column(
         Text, nullable=False, doc="Державний номер причепа. Не може збігатися з номером тягача."
     )
@@ -607,6 +643,8 @@ class Trip(Base):
     exporter_company: Mapped["Company"] = relationship(foreign_keys=[exporter_company_id])
     creator: Mapped["Employee"] = relationship(foreign_keys=[created_by])
     driver: Mapped["Employee | None"] = relationship(foreign_keys=[driver_id])
+    truck_vehicle: Mapped["Vehicle | None"] = relationship(foreign_keys=[truck_id])
+    trailer_vehicle: Mapped["Vehicle | None"] = relationship(foreign_keys=[trailer_id])
 
     __table_args__ = (
         # Під основний запит списку: живі рейси, найближчі за датою прибуття.

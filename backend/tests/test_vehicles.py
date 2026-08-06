@@ -1,8 +1,11 @@
-"""Тести додавання тягачів і причепів.
+"""Тести довідника транспорту.
 
 Ключова відмінність між ролями — звідки береться компанія: головний адмін
 обирає її зі списку, адміністратору компанії вона береться з його запису
 в employees, і підмінити її він не може.
+
+Тягачі й причепи живуть в одній таблиці й відрізняються видом: «Тягач» —
+рівно один вид, решта — причепи.
 """
 
 import pytest
@@ -22,12 +25,11 @@ from app.bot.handlers.vehicles import (
     on_add_vehicle,
     on_vehicle_delete,
     on_vehicle_delete_confirm,
-    step_brand,
     step_company,
     step_confirm,
-    step_kind,
     step_license_plate,
-    step_model,
+    step_make_model,
+    step_type,
 )
 from app.bot.keyboards import (
     MENU_VEHICLE_ADD,
@@ -38,7 +40,7 @@ from app.bot.keyboards import (
     VEHICLE_TYPE_PREFIX,
 )
 from app.bot.states import VehicleForm
-from app.models import Company, Employee, Role, Truck
+from app.models import VEHICLE_TYPES, Company, Employee, Role, Vehicle
 from tests.conftest import (
     ADMIN_ID,
     OWNER_ID,
@@ -49,6 +51,10 @@ from tests.conftest import (
     make_access,
     permissions_for,
 )
+
+
+TRACTOR = VEHICLE_TYPES.index("Тягач")
+GRAIN_TRAILER = VEHICLE_TYPES.index("Зерновоз")
 
 
 @pytest.fixture
@@ -93,8 +99,7 @@ async def company_admin(session, companies):
 
 
 async def _fill_fields(state, session, *, plate="AA1234BB"):
-    await step_brand(FakeMessage("Volvo"), state)
-    await step_model(FakeMessage("FH16"), state)
+    await step_make_model(FakeMessage("Volvo FH16"), state)
     await step_license_plate(FakeMessage(plate), state, session)
 
 
@@ -106,32 +111,32 @@ async def _fill_fields(state, session, *, plate="AA1234BB"):
 async def test_main_admin_picks_a_company(session, state, access_admin, companies):
     first, _ = companies
     await on_add_vehicle(FakeCallback(MENU_VEHICLE_ADD), state, access_admin)
-    kind = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:truck")
+    picked = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:{TRACTOR}")
 
-    await step_kind(kind, state, session, access_admin)
+    await step_type(picked, state, session, access_admin)
 
     assert await state.get_state() == VehicleForm.company
-    data = callback_data(kind.message.markups[0])
+    data = callback_data(picked.message.markups[0])
     assert f"{VEHICLE_COMPANY_PREFIX}:{first.id}" in data
 
 
 async def test_company_button_shows_name_and_tax_id(
     session, state, access_admin, companies
 ):
-    await state.set_state(VehicleForm.kind)
-    kind = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:truck")
+    await state.set_state(VehicleForm.type)
+    picked = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:{TRACTOR}")
 
-    await step_kind(kind, state, session, access_admin)
+    await step_type(picked, state, session, access_admin)
 
-    labels = [b.text for row in kind.message.markups[0].inline_keyboard for b in row]
+    labels = [b.text for row in picked.message.markups[0].inline_keyboard for b in row]
     assert "Alebor IT - 000000" in labels
 
 
 async def test_main_admin_creates_a_truck(session, state, access_admin, companies):
     first, _ = companies
     await on_add_vehicle(FakeCallback(MENU_VEHICLE_ADD), state, access_admin)
-    await step_kind(
-        FakeCallback(f"{VEHICLE_TYPE_PREFIX}:truck"), state, session, access_admin
+    await step_type(
+        FakeCallback(f"{VEHICLE_TYPE_PREFIX}:{TRACTOR}"), state, session, access_admin
     )
     await step_company(
         FakeCallback(f"{VEHICLE_COMPANY_PREFIX}:{first.id}"), state, session, access_admin
@@ -140,19 +145,21 @@ async def test_main_admin_creates_a_truck(session, state, access_admin, companie
 
     await step_confirm(FakeCallback(VEHICLE_CONFIRM), state, session, access_admin)
 
-    truck = await repository.get_vehicle_by_plate(session, "truck", "AA1234BB")
+    truck = await repository.get_vehicle_by_plate(session, "AA1234BB")
     assert truck is not None
-    assert truck.brand == "Volvo"
-    assert truck.model == "FH16"
-    assert truck.company_id == first.id
+    assert truck.make_model == "Volvo FH16"
+    assert truck.type == "Тягач"
+    assert truck.owner_company_id == first.id
     assert await state.get_state() is None
 
 
-async def test_trailer_goes_to_its_own_table(session, state, access_admin, companies):
+async def test_a_trailer_keeps_its_kind(session, state, access_admin, companies):
+    """Вид причепа — властивість самого причепа: далі він підставиться в
+    рейс замість того, щоб набирати «зерновоз» удесяте."""
     first, _ = companies
-    await state.set_state(VehicleForm.kind)
-    await step_kind(
-        FakeCallback(f"{VEHICLE_TYPE_PREFIX}:trailer"), state, session, access_admin
+    await state.set_state(VehicleForm.type)
+    await step_type(
+        FakeCallback(f"{VEHICLE_TYPE_PREFIX}:{GRAIN_TRAILER}"), state, session, access_admin
     )
     await step_company(
         FakeCallback(f"{VEHICLE_COMPANY_PREFIX}:{first.id}"), state, session, access_admin
@@ -160,40 +167,45 @@ async def test_trailer_goes_to_its_own_table(session, state, access_admin, compa
     await _fill_fields(state, session, plate="BB5678CC")
     await step_confirm(FakeCallback(VEHICLE_CONFIRM), state, session, access_admin)
 
-    assert await repository.get_vehicle_by_plate(session, "trailer", "BB5678CC")
-    assert await repository.get_vehicle_by_plate(session, "truck", "BB5678CC") is None
+    trailer = await repository.get_vehicle_by_plate(session, "BB5678CC")
+    assert trailer.type == "Зерновоз"
+    assert not trailer.is_tractor
+    # Половини списку діляться саме за видом, а не за окремою колонкою.
+    trucks, _n = await repository.list_company_vehicles(session, "truck", first.id)
+    trailers, _n = await repository.list_company_vehicles(session, "trailer", first.id)
+    assert [v.license_plate for v in trailers] == ["BB5678CC"]
+    assert trucks == []
 
 
 async def test_confirmation_shows_what_was_entered(
     session, state, access_admin, companies
 ):
     first, _ = companies
-    await state.set_state(VehicleForm.kind)
-    await step_kind(
-        FakeCallback(f"{VEHICLE_TYPE_PREFIX}:truck"), state, session, access_admin
+    await state.set_state(VehicleForm.type)
+    await step_type(
+        FakeCallback(f"{VEHICLE_TYPE_PREFIX}:{TRACTOR}"), state, session, access_admin
     )
     await step_company(
         FakeCallback(f"{VEHICLE_COMPANY_PREFIX}:{first.id}"), state, session, access_admin
     )
-    await step_brand(FakeMessage("Scania"), state)
-    await step_model(FakeMessage("R450"), state)
+    await step_make_model(FakeMessage("Scania R450"), state)
     message = FakeMessage("CC9012DD")
 
     await step_license_plate(message, state, session)
 
     summary = message.answers[0]
-    for expected in ("Тягач", "Scania", "R450", "CC9012DD", "Alebor IT"):
+    for expected in ("Тягач", "Scania R450", "CC9012DD", "Alebor IT"):
         assert expected in summary
 
 
 async def test_no_companies_stops_the_flow(session, state, access_admin):
-    await state.set_state(VehicleForm.kind)
-    kind = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:truck")
+    await state.set_state(VehicleForm.type)
+    picked = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:{TRACTOR}")
 
-    await step_kind(kind, state, session, access_admin)
+    await step_type(picked, state, session, access_admin)
 
     assert await state.get_state() is None
-    assert "хоча б одну компанію" in kind.message.answers[0]
+    assert "хоча б одну компанію" in picked.message.answers[0]
 
 
 # ---------------------------------------------------------------------------
@@ -204,22 +216,22 @@ async def test_no_companies_stops_the_flow(session, state, access_admin):
 async def test_company_admin_skips_the_company_step(session, state, company_admin):
     access, company = company_admin
     await on_add_vehicle(FakeCallback(MENU_VEHICLE_ADD), state, access)
-    kind = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:truck", user=FakeUser(OWNER_ID))
+    picked = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:{TRACTOR}", user=FakeUser(OWNER_ID))
 
-    await step_kind(kind, state, session, access)
+    await step_type(picked, state, session, access)
 
     # Компанію не питаємо — одразу поля.
-    assert await state.get_state() == VehicleForm.brand
-    assert (await state.get_data())["company_id"] == company.id
+    assert await state.get_state() == VehicleForm.make_model
+    assert (await state.get_data())["owner_company_id"] == company.id
 
 
 async def test_company_admin_vehicle_is_bound_to_own_company(
     session, state, company_admin
 ):
     access, company = company_admin
-    await state.set_state(VehicleForm.kind)
-    await step_kind(
-        FakeCallback(f"{VEHICLE_TYPE_PREFIX}:truck", user=FakeUser(OWNER_ID)),
+    await state.set_state(VehicleForm.type)
+    await step_type(
+        FakeCallback(f"{VEHICLE_TYPE_PREFIX}:{TRACTOR}", user=FakeUser(OWNER_ID)),
         state, session, access,
     )
     await _fill_fields(state, session, plate="DD3456EE")
@@ -228,8 +240,8 @@ async def test_company_admin_vehicle_is_bound_to_own_company(
         FakeCallback(VEHICLE_CONFIRM, user=FakeUser(OWNER_ID)), state, session, access
     )
 
-    truck = await repository.get_vehicle_by_plate(session, "truck", "DD3456EE")
-    assert truck.company_id == company.id
+    truck = await repository.get_vehicle_by_plate(session, "DD3456EE")
+    assert truck.owner_company_id == company.id
 
 
 # ---------------------------------------------------------------------------
@@ -242,11 +254,11 @@ async def test_duplicate_plate_is_caught_before_confirmation(
 ):
     """Номер унікальний. Ловимо на вводі, а не помилкою БД після підтвердження."""
     first, _ = companies
-    session.add(Truck(brand="MAN", model="TGX", license_plate="EE7890FF"))
+    session.add(Vehicle(type="Тягач", make_model="MAN TGX", license_plate="EE7890FF"))
     await session.commit()
 
     await state.set_state(VehicleForm.license_plate)
-    await state.update_data(kind="truck", company_id=first.id, brand="X", model="Y")
+    await state.update_data(type="Тягач", owner_company_id=first.id, make_model="X Y")
     message = FakeMessage("EE7890FF")
 
     await step_license_plate(message, state, session)
@@ -259,17 +271,17 @@ async def test_plate_taken_while_form_was_open(session, state, access_admin, com
     first, _ = companies
     await state.set_state(VehicleForm.confirm)
     await state.update_data(
-        kind="truck", company_id=first.id, brand="DAF", model="XF",
+        type="Тягач", owner_company_id=first.id, make_model="DAF XF",
         license_plate="FF1122GG",
     )
-    session.add(Truck(brand="Інший", model="Інша", license_plate="FF1122GG"))
+    session.add(Vehicle(type="Тягач", make_model="Інший", license_plate="FF1122GG"))
     await session.commit()
 
     callback = FakeCallback(VEHICLE_CONFIRM)
     await step_confirm(callback, state, session, access_admin)
 
-    trucks = await repository.get_vehicle_by_plate(session, "truck", "FF1122GG")
-    assert trucks.brand == "Інший"  # наш запис не перезаписав чужий
+    trucks = await repository.get_vehicle_by_plate(session, "FF1122GG")
+    assert trucks.make_model == "Інший"  # наш запис не перезаписав чужий
     assert "уже є" in callback.message.answers[0]
 
 
@@ -278,7 +290,7 @@ async def test_plate_is_normalised_to_upper_case(
 ):
     first, _ = companies
     await state.set_state(VehicleForm.license_plate)
-    await state.update_data(kind="truck", company_id=first.id, brand="X", model="Y")
+    await state.update_data(type="Тягач", owner_company_id=first.id, make_model="X Y")
 
     await step_license_plate(FakeMessage("aa9999bb"), state, session)
 
@@ -291,7 +303,7 @@ async def test_plate_length_is_checked(
 ):
     first, _ = companies
     await state.set_state(VehicleForm.license_plate)
-    await state.update_data(kind="truck", company_id=first.id, brand="X", model="Y")
+    await state.update_data(type="Тягач", owner_company_id=first.id, make_model="X Y")
     message = FakeMessage(plate)
 
     await step_license_plate(message, state, session)
@@ -301,13 +313,13 @@ async def test_plate_length_is_checked(
 
 
 async def test_unknown_vehicle_type_is_rejected(session, state, access_admin):
-    await state.set_state(VehicleForm.kind)
-    callback = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:bicycle")
+    await state.set_state(VehicleForm.type)
+    callback = FakeCallback(f"{VEHICLE_TYPE_PREFIX}:99")
 
-    await step_kind(callback, state, session, access_admin)
+    await step_type(callback, state, session, access_admin)
 
-    assert callback.answered == ["Невідомий тип"]
-    assert await state.get_state() == VehicleForm.kind
+    assert callback.answered == ["Невідомий вид"]
+    assert await state.get_state() == VehicleForm.type
 
 
 async def test_ordinary_user_cannot_add_a_vehicle(session, state, access):
@@ -329,18 +341,18 @@ async def test_delete_asks_before_erasing(session, state, access_admin, companie
     """Рядок транспорту стирається назовсім, тож питаємо."""
     first, _ = companies
     truck = await repository.create_vehicle(
-        session, "truck", brand="Volvo", model="FH",
-        license_plate="AA1111AA", company_id=first.id,
+        session, type="Тягач", make_model="Volvo FH",
+        license_plate="AA1111AA", owner_company_id=first.id,
     )
     callback = FakeCallback(
-        f"{VEHICLE_DELETE_PREFIX}:truck:{truck.id}", user=FakeUser(ADMIN_ID)
+        f"{VEHICLE_DELETE_PREFIX}:{truck.id}", user=FakeUser(ADMIN_ID)
     )
 
     await on_vehicle_delete(callback, session, access_admin)
 
     assert "Видалити" in callback.message.answers[0]
     # Поки не підтвердили — машина на місці.
-    assert await repository.get_vehicle(session, "truck", truck.id) is not None
+    assert await repository.get_vehicle(session, truck.id) is not None
 
 
 async def test_confirmed_delete_frees_the_plate(
@@ -349,35 +361,35 @@ async def test_confirmed_delete_frees_the_plate(
     """М'яке видалення тут нічого не дало б: номер лишався б зайнятим."""
     first, _ = companies
     truck = await repository.create_vehicle(
-        session, "truck", brand="Volvo", model="FH",
-        license_plate="AA1111AA", company_id=first.id,
+        session, type="Тягач", make_model="Volvo FH",
+        license_plate="AA1111AA", owner_company_id=first.id,
     )
     callback = FakeCallback(
-        f"{VEHICLE_DELETE_CONFIRM}:truck:{truck.id}", user=FakeUser(ADMIN_ID)
+        f"{VEHICLE_DELETE_CONFIRM}:{truck.id}", user=FakeUser(ADMIN_ID)
     )
 
     await on_vehicle_delete_confirm(callback, state, session, access_admin)
 
-    assert await repository.get_vehicle(session, "truck", truck.id) is None
-    assert await repository.get_vehicle_by_plate(session, "truck", "AA1111AA") is None
+    assert await repository.get_vehicle(session, truck.id) is None
+    assert await repository.get_vehicle_by_plate(session, "AA1111AA") is None
 
 
 async def test_logist_may_add_but_not_delete(session, state, companies):
     """У логіста на транспорт C,R,E — і жодного D."""
     first, _ = companies
     truck = await repository.create_vehicle(
-        session, "truck", brand="Volvo", model="FH",
-        license_plate="AA1111AA", company_id=first.id,
+        session, type="Тягач", make_model="Volvo FH",
+        license_plate="AA1111AA", owner_company_id=first.id,
     )
     access = make_access(OWNER_ID, role=ROLE_LOGIST, company_id=first.id)
 
     callback = FakeCallback(
-        f"{VEHICLE_DELETE_PREFIX}:truck:{truck.id}", user=FakeUser(OWNER_ID)
+        f"{VEHICLE_DELETE_PREFIX}:{truck.id}", user=FakeUser(OWNER_ID)
     )
     await on_vehicle_delete(callback, session, access)
 
     assert callback.answered == [NO_RIGHTS]
-    assert await repository.get_vehicle(session, "truck", truck.id) is not None
+    assert await repository.get_vehicle(session, truck.id) is not None
 
 
 async def test_manager_cannot_reach_vehicles_at_all(session, state, companies):
