@@ -58,6 +58,9 @@ MENU_TRIPS = "menu:trips"
 TRIP_CAL_PREFIX = "trip:cal"
 TRIP_DATE_PREFIX = "trip:date"
 TRIP_EXPORTER_PREFIX = "trip:exp"
+#: Замовник: trip:cli:<id компанії> або trip:cli:manual.
+TRIP_CLIENT_PREFIX = "trip:cli"
+TRIP_CLIENT_MANUAL = "trip:cli:manual"
 TRIP_CONFIRM = "trip:confirm"
 TRIP_SHOW_PREFIX = "trip:show"
 TRIP_EDIT_PREFIX = "trip:edit"
@@ -663,6 +666,21 @@ def calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="✖️ Скасувати", callback_data=FORM_CANCEL)
     )
+    return builder.as_markup()
+
+
+def trip_client_keyboard(companies) -> InlineKeyboardMarkup:
+    """Замовник: зі списку компаній або вручну. Ручний ввід потрібен завжди —
+    замовник цілком може не бути в системі."""
+    builder = InlineKeyboardBuilder()
+    for company in companies:
+        builder.button(
+            text=f"{company.name} - {company.tax_id}",
+            callback_data=f"{TRIP_CLIENT_PREFIX}:{company.id}",
+        )
+    builder.button(text="✍️ Ввести вручну", callback_data=TRIP_CLIENT_MANUAL)
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(1)
     return builder.as_markup()
 
 

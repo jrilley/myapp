@@ -445,13 +445,28 @@ class Trip(Base):
         Text, nullable=False, doc="Дата прибуття автомобіля, «РРРР-ММ-ДД». Обирається в календарі."
     )
 
-    # У вихідній схемі ці два поля TEXT, але в них лежить company.id. Тримаємо
-    # їх INTEGER із справжнім FK: інакше зв'язок неможливо ні перевірити, ні
-    # зджойнити, а назва компанії дублювалась би в кожному рейсі.
-    client_company_id: Mapped[int] = mapped_column(
+    # Компанія, яка веде рейс. Не питається: береться з того, хто створює.
+    # Саме за нею працює обсяг доступу «рейси компанії» й дублювання в робочий
+    # чат — замовник для цього не годиться, він тепер чужа компанія.
+    owner_company_id: Mapped[int] = mapped_column(
         ForeignKey("company.id"),
         nullable=False,
-        doc="Компанія-замовник. Береться з компанії того, хто створює рейс.",
+        doc=(
+            "Компанія, яка веде рейс: компанія того, хто його створив. "
+            "За нею визначається, хто рейс бачить і в який чат він іде."
+        ),
+    )
+
+    # Замовник може не бути в системі взагалі, тож FK необов'язковий, а назва
+    # обов'язкова: та сама пара «зв'язок + копія», що й у водія з менеджером.
+    client_company_id: Mapped[int | None] = mapped_column(
+        ForeignKey("company.id"),
+        doc="Компанія-замовник, якщо її обрали зі списку. Порожньо — введена вручну.",
+    )
+    client_company_name: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        doc="Назва замовника, як вона потрапила в документ.",
     )
     exporter_company_id: Mapped[int] = mapped_column(
         ForeignKey("company.id"),
@@ -569,7 +584,10 @@ class Trip(Base):
 
     # foreign_keys обов'язковий: на company і на employees звідси веде
     # більш ніж один FK, і SQLAlchemy сама не вгадає, який із них чий.
-    client_company: Mapped["Company"] = relationship(foreign_keys=[client_company_id])
+    owner_company: Mapped["Company"] = relationship(foreign_keys=[owner_company_id])
+    client_company: Mapped["Company | None"] = relationship(
+        foreign_keys=[client_company_id]
+    )
     exporter_company: Mapped["Company"] = relationship(foreign_keys=[exporter_company_id])
     creator: Mapped["Employee"] = relationship(foreign_keys=[created_by])
     driver: Mapped["Employee | None"] = relationship(foreign_keys=[driver_id])
@@ -577,7 +595,7 @@ class Trip(Base):
     __table_args__ = (
         # Під основний запит списку: живі рейси, найближчі за датою прибуття.
         Index("ix_trips_visible", "deleted_at", "arrival_date"),
-        Index("ix_trips_client", "client_company_id", "deleted_at"),
+        Index("ix_trips_owner", "owner_company_id", "deleted_at"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

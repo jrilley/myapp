@@ -478,6 +478,7 @@ async def list_company_employees(
 
 def _trip_with_links():
     return (
+        selectinload(Trip.owner_company),
         selectinload(Trip.client_company),
         selectinload(Trip.exporter_company),
         selectinload(Trip.creator),
@@ -525,7 +526,7 @@ async def list_trips(
     """
     filters = [Trip.deleted_at.is_(None)]
     if company_id is not None:
-        filters.append(Trip.client_company_id == company_id)
+        filters.append(Trip.owner_company_id == company_id)
     if participant_id is not None:
         filters.append(
             or_(Trip.created_by == participant_id, Trip.driver_id == participant_id)

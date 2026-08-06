@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "6a3a66f4347b",
+  "alembic_head": "5a8e1ff2ef40",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -1176,7 +1176,7 @@
           "description": "Дата прибуття автомобіля, «РРРР-ММ-ДД». Обирається в календарі."
         },
         {
-          "name": "client_company_id",
+          "name": "owner_company_id",
           "type": {
             "generic": "INTEGER",
             "sqlite": "INTEGER",
@@ -1191,7 +1191,43 @@
           "on_update": null,
           "unique": false,
           "references": "company.id",
-          "description": "Компанія-замовник. Береться з компанії того, хто створює рейс."
+          "description": "Компанія, яка веде рейс: компанія того, хто його створив. За нею визначається, хто рейс бачить і в який чат він іде."
+        },
+        {
+          "name": "client_company_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "company.id",
+          "description": "Компанія-замовник, якщо її обрали зі списку. Порожньо — введена вручну."
+        },
+        {
+          "name": "client_company_name",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Назва замовника, як вона потрапила в документ."
         },
         {
           "name": "exporter_company_id",
@@ -1741,13 +1777,23 @@
           ],
           "on_delete": null,
           "on_update": null
+        },
+        {
+          "columns": [
+            "owner_company_id"
+          ],
+          "references": [
+            "company.id"
+          ],
+          "on_delete": null,
+          "on_update": null
         }
       ],
       "indexes": [
         {
-          "name": "ix_trips_client",
+          "name": "ix_trips_owner",
           "columns": [
-            "client_company_id",
+            "owner_company_id",
             "deleted_at"
           ],
           "unique": false

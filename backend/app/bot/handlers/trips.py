@@ -36,6 +36,7 @@ from app.bot.guards import deny
 from app.bot.constants import (
     DATE_FORMAT,
     DATETIME_FORMAT,
+    MAX_COMPANY_NAME,
     MAX_LICENSE_PLATE,
     MAX_PHONE,
     MAX_TRIP_MASS,
@@ -51,6 +52,8 @@ from app.bot.keyboards import (
     MENU_TRIP_NEW,
     MENU_TRIPS,
     TRIP_CAL_PREFIX,
+    TRIP_CLIENT_MANUAL,
+    TRIP_CLIENT_PREFIX,
     TRIP_CONFIRM,
     TRIP_DATE_PREFIX,
     TRIP_DELETE_PREFIX,
@@ -64,6 +67,7 @@ from app.bot.keyboards import (
     calendar_keyboard,
     cancel_keyboard,
     trip_card_keyboard,
+    trip_client_keyboard,
     trip_confirm_keyboard,
     trip_drivers_keyboard,
     trip_exporter_keyboard,
@@ -141,7 +145,7 @@ def _in_reach(access: Access, trip: Trip) -> bool:
     if scope == SCOPE_COMPANY:
         return (
             employee.company_id is not None
-            and employee.company_id == trip.client_company_id
+            and employee.company_id == trip.owner_company_id
         )
     return employee.id is not None and employee.id in (trip.created_by, trip.driver_id)
 
@@ -197,7 +201,7 @@ async def on_new_trip(
     # Замовника й логіста фіксуємо одразу: вони не залежать від подальших
     # кроків, і так їх неможливо переписати нічим, що прийде від користувача.
     await state.update_data(
-        client_company_id=employee.company_id,
+        owner_company_id=employee.company_id,
         created_by=employee.id,
         logist_fullname=employee.fullname,
         logist_phone_number=employee.phone_number,
@@ -258,6 +262,67 @@ def _parse_date(callback_data: str | None) -> str | None:
         return None
 
 
+async def _ask_client(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    """Замовника більше не беремо з того, хто заповнює: рейс возять для
+    чужої компанії, і його компанія тут ні до чого."""
+    await state.set_state(TripForm.client)
+    companies = await repository.list_companies(session)
+    await message.answer(
+        "Компанія-замовник:", reply_markup=trip_client_keyboard(companies)
+    )
+
+
+@router.callback_query(TripForm.client, F.data == TRIP_CLIENT_MANUAL)
+async def step_client_manual(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(client_company_id=None)
+    await state.set_state(TripForm.client_name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Назва компанії-замовника:", reply_markup=cancel_keyboard()
+        )
+
+
+@router.callback_query(TripForm.client, F.data.startswith(f"{TRIP_CLIENT_PREFIX}:"))
+async def step_client_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    company = (
+        await repository.get_company(session, int(raw_id)) if raw_id.isdigit() else None
+    )
+    if company is None:
+        await callback.answer("Невідома компанія", show_alert=True)
+        return
+
+    # Назву копіюємо в рейс і при виборі зі списку: рейс — документ, і він
+    # має лишитись читабельним, якщо компанію потім перейменують.
+    await state.update_data(
+        client_company_id=company.id,
+        client_company_name=company_label(company),
+    )
+    await callback.answer()
+    if callback.message is not None:
+        await _ask_exporter(callback.message, state, session, TripForm.exporter)
+
+
+@router.message(TripForm.client_name, F.text)
+async def step_client_name(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if not 2 <= len(value) <= MAX_COMPANY_NAME:
+        await message.answer(
+            f"Назва має бути від 2 до {MAX_COMPANY_NAME} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    await state.update_data(client_company_name=value)
+    await _ask_exporter(message, state, session, TripForm.exporter)
+
+
 async def _ask_exporter(
     message: Message, state: FSMContext, session: AsyncSession, next_state
 ) -> bool:
@@ -284,7 +349,7 @@ async def step_arrival_date(
     await state.update_data(arrival_date=value)
     await callback.answer()
     if callback.message is not None:
-        await _ask_exporter(callback.message, state, session, TripForm.exporter)
+        await _ask_client(callback.message, state, session)
 
 
 @router.callback_query(TripForm.exporter, F.data.startswith(f"{TRIP_EXPORTER_PREFIX}:"))
@@ -410,7 +475,7 @@ async def _ask_driver(
     """Список водіїв компанії. Порожній список не тупик: ручний ввід поруч."""
     data = await state.get_data()
     employees, _ = await repository.list_company_employees(
-        session, data["client_company_id"], limit=50
+        session, data["owner_company_id"], limit=50
     )
     # Себе зі списку прибираємо: логіст, який сам себе везе, — це або помилка,
     # або той рідкісний випадок, для якого лишається ручний ввід.
@@ -444,7 +509,7 @@ async def step_driver_pick(
     data = await state.get_data()
     # Компанію звіряємо заново: id співробітника приходить у callback_data,
     # і без перевірки водієм можна було б призначити людину з чужої компанії.
-    if employee is None or employee.company_id != data["client_company_id"]:
+    if employee is None or employee.company_id != data["owner_company_id"]:
         await callback.answer("Невідомий співробітник", show_alert=True)
         return
 
@@ -493,11 +558,12 @@ async def _show_summary(
     await state.set_state(TripForm.confirm)
     data = await state.get_data()
 
-    client = await repository.get_company(session, data["client_company_id"])
     exporter = await repository.get_company(session, data["exporter_company_id"])
     await message.answer(
         format_trip_summary(
-            data, client=company_label(client), exporter=company_label(exporter)
+            data,
+            client=data["client_company_name"],
+            exporter=company_label(exporter),
         ),
         reply_markup=trip_confirm_keyboard(),
     )
@@ -506,7 +572,8 @@ async def _show_summary(
 #: Колонки, які беруться з форми. Перелік явний, щоб службові ключі стану
 #: (наприклад, назви компаній для підсумку) не потрапили в модель.
 TRIP_COLUMNS = (
-    "ttn_num", "arrival_date", "client_company_id", "exporter_company_id",
+    "ttn_num", "arrival_date", "owner_company_id", "client_company_id",
+    "client_company_name", "exporter_company_id",
     "created_by", "logist_fullname", "logist_phone_number", "logist_tg",
     "truck", "truck_license_plate", "trailer", "trailer_type",
     "trailer_license_plate", "grain_type", "driver_id", "driver_fullname",
@@ -537,7 +604,7 @@ async def _announce(session: AsyncSession, publisher: Publisher, trip: Trip) -> 
     else:
         notes.append("Водій сторонній — сповіщення не надсилалось.")
 
-    company = trip.client_company
+    company = trip.owner_company
     chat_id = company.company_chat_id if company else None
     if chat_id is None:
         notes.append("Робочий чат компанії не вказано — рейс нікуди не дубльовано.")
@@ -946,6 +1013,7 @@ async def on_trip_delete(
 
 
 @router.message(TripForm.ttn)
+@router.message(TripForm.client_name)
 @router.message(TripForm.truck)
 @router.message(TripForm.truck_plate)
 @router.message(TripForm.trailer)

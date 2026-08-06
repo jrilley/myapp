@@ -37,6 +37,9 @@ from app.bot.handlers.trips import (
     edit_exporter,
     edit_value,
     step_arrival_date,
+    step_client_manual,
+    step_client_name,
+    step_client_pick,
     step_confirm,
     step_driver_manual,
     step_driver_name,
@@ -56,6 +59,8 @@ from app.bot.keyboards import (
     PAGE_PREFIX,
     PAGE_TRIPS,
     TRIP_CAL_PREFIX,
+    TRIP_CLIENT_MANUAL,
+    TRIP_CLIENT_PREFIX,
     TRIP_CONFIRM,
     TRIP_DATE_PREFIX,
     TRIP_DELETE_PREFIX,
@@ -170,7 +175,9 @@ async def make_trip(session, creator, exporter, **overrides):
     payload = {
         "ttn_num": "ТТН-1",
         "arrival_date": "2026-08-10",
-        "client_company_id": creator.company_id,
+        "owner_company_id": creator.company_id,
+        "client_company_id": exporter.id,
+        "client_company_name": exporter.name,
         "exporter_company_id": exporter.id,
         "created_by": creator.id,
         "logist_fullname": creator.fullname,
@@ -195,6 +202,9 @@ async def fill_form_until_driver(state, session, access, exporter_id, *, grain="
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, access)
     await step_ttn(FakeMessage("ТТН-000123"), state)
     await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+    await step_client_pick(
+        FakeCallback(f"{TRIP_CLIENT_PREFIX}:{exporter_id}"), state, session
+    )
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
     )
@@ -227,6 +237,10 @@ async def fill_form(state, session, access, **overrides):
     await step_ttn(FakeMessage(steps["ttn"]), state)
     await step_arrival_date(
         FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session
+    )
+    client_id = overrides.get("client_id", exporter_id)
+    await step_client_pick(
+        FakeCallback(f"{TRIP_CLIENT_PREFIX}:{client_id}"), state, session
     )
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
@@ -277,7 +291,7 @@ async def test_form_creates_a_trip_with_every_field(
     assert await state.get_state() is None
 
 
-async def test_client_and_logist_come_from_the_creator(
+async def test_owner_and_manager_come_from_the_creator(
     session, state, world, logist, publisher
 ):
     """Ці поля не питаються — підставити чужу компанію нічим."""
@@ -287,7 +301,9 @@ async def test_client_and_logist_come_from_the_creator(
 
     trips, _ = await repository.list_trips(session)
     trip = trips[0]
-    assert trip.client_company_id == world.ours.id
+    # Власник — компанія творця; замовник — той, кого обрали.
+    assert trip.owner_company_id == world.ours.id
+    assert trip.client_company_id == world.theirs.id
     assert trip.exporter_company_id == world.theirs.id
     assert trip.created_by == world.logist.id
     assert trip.logist_fullname == "Марія Логіст"
@@ -369,6 +385,9 @@ async def test_trailer_plate_must_differ_from_the_truck(session, state, world, l
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
     await step_ttn(FakeMessage("ТТН-2"), state)
     await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+    await step_client_pick(
+        FakeCallback(f"{TRIP_CLIENT_PREFIX}:{world.theirs.id}"), state, session
+    )
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.theirs.id}"), state, session
     )
@@ -497,8 +516,7 @@ async def test_confirmation_survives_a_fresh_session(
         await step_confirm(callback, state, fresh, publisher, logist)
 
     # Картка рейсу дійшла до логіста цілою, з обома компаніями.
-    assert "Alebor IT 000000" in callback.message.answers[0]
-    assert "ТОВ Чужа 99999999" in callback.message.answers[0]
+    assert "ТОВ Чужа" in callback.message.answers[0]
 
 
 async def test_unreachable_driver_does_not_lose_the_trip(
@@ -723,8 +741,7 @@ async def test_card_shows_both_companies(session, state, chief, trips):
     await on_trip_card(callback, state, session, chief)
 
     text = callback.message.answers[0]
-    assert "Alebor IT 000000" in text
-    assert "ТОВ Чужа 99999999" in text
+    assert "ТОВ Чужа" in text
     assert "Марія Логіст" in text
 
 
@@ -941,3 +958,120 @@ async def test_operator_cannot_delete_a_trip(session, operator, trips, publisher
 
     assert callback.answered == [DENIED]
     assert await repository.get_trip(session, trips.mine.id) is not None
+
+
+# ---------------------------------------------------------------------------
+# Замовник
+# ---------------------------------------------------------------------------
+
+
+async def test_client_is_asked_not_taken_from_the_creator(
+    session, state, world, logist, publisher
+):
+    """Рейс возять для чужої компанії — компанія того, хто заповнює, тут
+    ні до чого."""
+    callback = await fill_form(
+        state, session, logist,
+        exporter_id=world.ours.id, client_id=world.theirs.id,
+    )
+
+    await step_confirm(callback, state, session, publisher, logist)
+
+    trips, _ = await repository.list_trips(session)
+    trip = trips[0]
+    assert trip.client_company_id == world.theirs.id
+    assert trip.client_company_name == "ТОВ Чужа 99999999"
+    # А власник — усе одно компанія творця.
+    assert trip.owner_company_id == world.ours.id
+
+
+async def test_client_can_be_typed_by_hand(
+    session, state, world, logist, publisher
+):
+    """Замовника може не бути в системі — тоді лишається сама назва."""
+    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
+    await step_ttn(FakeMessage("ТТН-777"), state)
+    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+
+    await step_client_manual(FakeCallback(TRIP_CLIENT_MANUAL), state)
+    assert await state.get_state() == TripForm.client_name
+    await step_client_name(FakeMessage("ФГ Стороннє"), state, session)
+
+    await step_exporter(
+        FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.theirs.id}"), state, session
+    )
+    await step_truck(FakeMessage("Volvo"), state)
+    await step_truck_plate(FakeMessage("AA9999AA"), state)
+    await step_trailer(FakeMessage("Schmitz"), state)
+    await step_trailer_type(FakeMessage("зерновоз"), state)
+    await step_trailer_plate(FakeMessage("CC9999CC"), state)
+    await step_grain(FakeMessage("Ріпак"), state, session)
+    await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state)
+    await step_driver_name(FakeMessage("Іван Водій"), state)
+    await step_driver_phone(FakeMessage("+380500000000"), state, session)
+
+    confirm = FakeCallback(TRIP_CONFIRM, user=FakeUser(OWNER_ID))
+    await step_confirm(confirm, state, session, publisher, logist)
+
+    trips, _ = await repository.list_trips(session)
+    trip = next(t for t in trips if t.ttn_num == "ТТН-777")
+    assert trip.client_company_id is None
+    assert trip.client_company_name == "ФГ Стороннє"
+    assert trip.owner_company_id == world.ours.id
+
+
+async def test_short_client_name_keeps_the_step(session, state, world, logist):
+    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
+    await step_ttn(FakeMessage("ТТН-778"), state)
+    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
+    await step_client_manual(FakeCallback(TRIP_CLIENT_MANUAL), state)
+
+    message = FakeMessage("Ф")
+    await step_client_name(message, state, session)
+
+    assert await state.get_state() == TripForm.client_name
+    assert "від 2 до" in message.answers[0]
+
+
+async def test_scope_follows_the_owner_not_the_client(session, world, boss):
+    """Головне в цій зміні: доступ рахується за компанією-власником.
+
+    Рейс із замовником «ТОВ Чужа» лишається видимим для своєї компанії, а
+    чужий рейс із замовником «Alebor IT» — ні. На client_company_id обсяг
+    тримати вже не можна.
+    """
+    await make_trip(session, world.logist, world.theirs, ttn_num="НАШ-ДЛЯ-ЧУЖИХ")
+    await make_trip(session, world.outsider, world.ours, ttn_num="ЧУЖИЙ-ДЛЯ-НАС")
+
+    text, _ = await render_trips(session, boss)
+
+    assert "НАШ-ДЛЯ-ЧУЖИХ" in text
+    assert "ЧУЖИЙ-ДЛЯ-НАС" not in text
+
+
+async def test_working_chat_is_the_owners_not_the_clients(
+    session, state, world, logist, publisher
+):
+    """Дублювання в чат теж іде за власником: чат замовника — чужий."""
+    await repository.update_company(session, world.theirs, company_chat_id=-100999)
+    callback = await fill_form(
+        state, session, logist,
+        exporter_id=world.ours.id, client_id=world.theirs.id,
+    )
+
+    await step_confirm(callback, state, session, publisher, logist)
+
+    targets = [chat for chat, _ in publisher.sent]
+    assert OUR_CHAT_ID in targets
+    assert -100999 not in targets
+
+
+async def test_card_says_manager_not_logist(session, state, chief, trips):
+    """Підпис у документі — «Менеджер», хоч колонки досі logist_*."""
+    callback = FakeCallback(f"{TRIP_SHOW_PREFIX}:{trips.mine.id}", user=FakeUser(CHIEF_ID))
+
+    await on_trip_card(callback, state, session, chief)
+
+    text = callback.message.answers[0]
+    assert "<b>Менеджер:</b>" in text
+    assert "Логіст:" not in text

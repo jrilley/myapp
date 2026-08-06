@@ -580,6 +580,8 @@ def page_organization(s: Sheet) -> None:
 TRIP_ENTERED = [
     ("ttn_num", "TEXT NOT NULL", ""),
     ("arrival_date", "TEXT NOT NULL", ""),
+    ("client_company_id", "INTEGER", "FK"),
+    ("client_company_name", "TEXT NOT NULL", ""),
     ("exporter_company_id", "INTEGER NOT NULL", "FK"),
     ("truck", "TEXT NOT NULL", ""),
     ("truck_license_plate", "TEXT NOT NULL", ""),
@@ -594,7 +596,7 @@ TRIP_ENTERED = [
 
 TRIP_DERIVED = [
     ("id", "INTEGER", "PK"),
-    ("client_company_id", "INTEGER NOT NULL", "FK"),
+    ("owner_company_id", "INTEGER NOT NULL", "FK"),
     ("created_by", "INTEGER NOT NULL", "FK"),
     ("logist_fullname", "TEXT NOT NULL", ""),
     ("logist_phone_number", "TEXT NOT NULL", ""),
@@ -620,22 +622,22 @@ TRIP_LATER = [
 TRIP_STEPS = [
     ("01", "Номер ТТН", "текст"),
     ("02", "Дата прибуття", "календар, не текст"),
-    ("03", "Експортер", "кнопки: назва + ІПН"),
-    ("04", "Тягач", "марка й модель"),
-    ("05", "Номер тягача", "верхній регістр"),
-    ("06", "Причіп", "марка й модель"),
-    ("07", "Тип причепа", "зерновоз, самоскид"),
-    ("08", "Номер причепа", "не такий, як у тягача"),
-    ("09", "Культура", "текст"),
-    ("10", "Водій", "зі складу компанії"),
-    ("11", "або вручну", "ПІБ і телефон"),
+    ("03", "Замовник", "зі списку або вручну"),
+    ("04", "Експортер", "кнопки: назва + ІПН"),
+    ("05", "Тягач", "марка й модель"),
+    ("06", "Номер тягача", "верхній регістр"),
+    ("07", "Причіп", "марка й модель"),
+    ("08", "Тип причепа", "зерновоз, самоскид"),
+    ("09", "Номер причепа", "не такий, як у тягача"),
+    ("10", "Культура", "текст"),
+    ("11", "Водій", "зі складу або вручну"),
     ("12", "Перевірка", "«Створити рейс»"),
 ]
 
 VISIBILITY = [
     ("Користувач", "власні рейси — created_by або driver_id це він"),
     ("Водій рейсу", "бачить, але не редагує: рейс йому видали"),
-    ("Адміністратор компанії", "рейси своєї компанії: client_company_id = його company_id"),
+    ("Адміністратор компанії", "рейси своєї компанії: owner_company_id = його company_id"),
     ("Головний адміністратор", "усі рейси"),
 ]
 
@@ -647,19 +649,19 @@ def page_trip(s: Sheet) -> None:
     s.eyebrow(M, 46, "myapp · схема системи", color=TEAL)
     s.text(M, 76, "Рейс", font="Sans-Bold", size=25, color=INK)
     s.wrap(M, 96, 700,
-           "Рейс заводить логіст: десять кроків і підтвердження. Компанію-замовника "
-           "та контакти логіста бот не питає — вони беруться з рядка employees "
-           "того, хто заповнює форму, тож підставити чужу компанію нічим. Водія "
-           "обирають зі складу компанії; для стороннього перевізника лишається "
-           "ручний ввід, і тоді кроків одинадцять. Решта колонок заповнюється "
-           "вже після створення.",
+           "Рейс заводить менеджер: одинадцять кроків і підтвердження. Замовника "
+           "й водія обирають зі списку або вводять руками — вони цілком можуть "
+           "бути поза системою. А от компанію-власника й контакти менеджера бот "
+           "не питає: вони беруться з рядка employees того, хто заповнює форму. "
+           "Саме за власником працюють доступ і дублювання в робочий чат — "
+           "замовник для цього не годиться, він чужа компанія.",
            size=8.6, leading=11.5)
     s.text(s.W - M, 76, "аркуш 5 / 5", font="Mono", size=8, color=SLATE, align="right")
 
     col_w, gap = 350, 30
     xs = [M + i * (col_w + gap) for i in range(3)]
 
-    ty = s.section(xs[0], 150, col_w, "вводить логіст")
+    ty = s.section(xs[0], 150, col_w, "вводить менеджер")
     s.section(xs[1], 150, col_w, "підставляється")
     s.section(xs[2], 150, col_w, "заповнюється пізніше")
 
@@ -667,7 +669,8 @@ def page_trip(s: Sheet) -> None:
     s.entity(xs[1], ty, col_w, "trips  ·  з employees", TRIP_DERIVED, accent=RUST)
     s.entity(xs[2], ty, col_w, "trips  ·  службові", TRIP_LATER, accent=RUST)
 
-    ty2 = s.section(M, 466, s.W - 2 * M, "порядок кроків")
+    # Ліва колонка виросла до 14 рядків — секція кроків іде під нею.
+    ty2 = s.section(M, 505, s.W - 2 * M, "порядок кроків")
     chip_w = (s.W - 2 * M - 5 * 10) / 6
     for i, (num, title, rule) in enumerate(TRIP_STEPS):
         cx = M + (i % 6) * (chip_w + 10)
@@ -678,19 +681,20 @@ def page_trip(s: Sheet) -> None:
         s.text(cx + 32, cy + 18, title, font="Sans-Bold", size=8.5, color=INK)
         s.text(cx + 32, cy + 33, rule, font="Mono", size=7, color=SLATE)
 
-    note_ty = 604
-    s.box(M, note_ty, s.W - 2 * M, 48, fill=AMBER_SOFT, stroke=AMBER_SOFT)
-    s.line(M, note_ty, M, note_ty + 48, color=AMBER, width=2.5)
+    note_ty = 640
+    s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
+    s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
     s.wrap(M + 12, note_ty + 18, s.W - 2 * M - 24,
            "Відхилення від вихідного опису. client_company та exporter_company "
            "оголошені INTEGER із зовнішнім ключем, а не TEXT: у полі лежить "
            "company.id, і зв'язок має бути справжнім. edited_by лишили nullable — "
            "NOT NULL суперечив би вимозі «при створенні порожнє». Додано "
-           "logist_tg, щоб із рейсу можна було написати логісту, і driver_id — "
-           "щоб було кого сповістити.",
+           "logist_tg, щоб із рейсу можна було написати менеджеру, і driver_id — "
+           "щоб було кого сповістити. Колонки досі звуться logist_*, підпис у "
+           "документі — «Менеджер».",
            size=8, leading=10.5, color=AMBER)
 
-    ty3 = s.section(M, 668, s.W - 2 * M, "хто які рейси бачить")
+    ty3 = s.section(M, 694, s.W - 2 * M, "хто які рейси бачить")
     for i, (who, what) in enumerate(VISIBILITY):
         s.text(M, ty3 + 12 + i * 16, who, font="Sans-Bold", size=8, color=INK)
         s.text(M + 170, ty3 + 12 + i * 16, what, font="Mono", size=7.5, color=SLATE)
@@ -699,7 +703,7 @@ def page_trip(s: Sheet) -> None:
     s.text(M, s.H - 22,
            "Створений рейс іде водієві в приват і в робочий чат компанії "
            "(company.company_chat_id). Збій розсилки рейсу не скасовує — "
-           "логісту про це повідомляється.",
+           "менеджеру про це повідомляється.",
            font="Mono", size=7, color=SLATE)
 
 

@@ -67,8 +67,8 @@ def _trip_body(
     arrival_date: str,
     client: str,
     exporter: str,
-    logist_fullname: str,
-    logist_phone_number: str,
+    manager_fullname: str,
+    manager_phone_number: str,
     truck: str,
     truck_license_plate: str,
     trailer: str,
@@ -88,7 +88,8 @@ def _trip_body(
         f"<b>Дата прибуття:</b> {escape(arrival_date)}\n\n"
         f"<b>Замовник:</b> {escape(client)}\n"
         f"<b>Експортер:</b> {escape(exporter)}\n"
-        f"<b>Логіст:</b> {escape(logist_fullname)}, {escape(logist_phone_number)}\n\n"
+        f"<b>Менеджер:</b> {escape(manager_fullname)}, "
+        f"{escape(manager_phone_number)}\n\n"
         f"<b>Тягач:</b> {escape(truck)} · {escape(truck_license_plate)}\n"
         f"<b>Причіп:</b> {escape(trailer)} ({escape(trailer_type)}) · "
         f"{escape(trailer_license_plate)}\n"
@@ -99,18 +100,20 @@ def _trip_body(
 
 def format_trip_summary(data: dict, *, client: str, exporter: str) -> str:
     """Підсумок перед створенням. Показуємо рівно ті поля, які заповнює
-    людина, плюс підставлені замовника й логіста — решта колонок при
-    створенні порожні."""
+    людина, плюс підставленого менеджера — решта колонок при створенні
+    порожні."""
     return "<b>Перевірте рейс:</b>\n\n" + _trip_body(
         client=client,
         exporter=exporter,
+        # Колонки досі звуться logist_*, підпис у документі — «Менеджер».
+        manager_fullname=data["logist_fullname"],
+        manager_phone_number=data["logist_phone_number"],
         **{
             name: data[name]
             for name in (
-                "ttn_num", "arrival_date", "logist_fullname", "logist_phone_number",
-                "truck", "truck_license_plate", "trailer", "trailer_type",
-                "trailer_license_plate", "grain_type", "driver_fullname",
-                "driver_phone_number",
+                "ttn_num", "arrival_date", "truck", "truck_license_plate",
+                "trailer", "trailer_type", "trailer_license_plate", "grain_type",
+                "driver_fullname", "driver_phone_number",
             )
         },
     )
@@ -122,10 +125,10 @@ def format_trip(trip: Trip) -> str:
     text = f"🚛 <b>Рейс #{trip.id}</b> · {escape(trip.status)}\n\n" + _trip_body(
         ttn_num=trip.ttn_num,
         arrival_date=trip.arrival_date,
-        client=company_label(trip.client_company),
+        client=trip.client_company_name,
         exporter=company_label(trip.exporter_company),
-        logist_fullname=trip.logist_fullname,
-        logist_phone_number=trip.logist_phone_number,
+        manager_fullname=trip.logist_fullname,
+        manager_phone_number=trip.logist_phone_number,
         truck=trip.truck,
         truck_license_plate=trip.truck_license_plate,
         trailer=trip.trailer,
