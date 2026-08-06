@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -162,8 +163,36 @@ class Company(Base):
 #: міграції-сіди, і репозиторій, і перевірки прав.
 ROLE_MAIN_ADMIN = "Головний адміністратор"
 ROLE_COMPANY_ADMIN = "Адміністратор компанії"
-ROLE_USER = "Користувач"
+ROLE_MANAGER = "Менеджер"
+ROLE_LOGIST = "Логіст"
+ROLE_OPERATOR = "Оператор"
+ROLE_DISPATCHER = "Диспетчер"
 ROLE_DRIVER = "Водій"
+
+#: Розділи, на які видаються права.
+CATEGORY_COMPANY = "company"
+CATEGORY_EMPLOYEES = "employees"
+CATEGORY_VEHICLES = "vehicles"
+CATEGORY_TRIPS = "trips"
+
+CATEGORIES = (
+    CATEGORY_COMPANY,
+    CATEGORY_EMPLOYEES,
+    CATEGORY_VEHICLES,
+    CATEGORY_TRIPS,
+)
+
+CATEGORY_TITLES = {
+    CATEGORY_COMPANY: "Компанія",
+    CATEGORY_EMPLOYEES: "Працівники",
+    CATEGORY_VEHICLES: "Транспорт",
+    CATEGORY_TRIPS: "Рейси",
+}
+
+#: Наскільки широко діє право в межах розділу.
+SCOPE_OWN = "own"
+SCOPE_COMPANY = "company"
+SCOPE_ALL = "all"
 
 #: Що отримує кожен, хто щойно зареєструвався. Посада й роль однойменні, але
 #: це різні речі: посада каже, ким людина працює, роль — що їй дозволено.
@@ -204,9 +233,70 @@ class Role(Base):
     )
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="role")
+    permissions: Mapped[list["RolePermission"]] = relationship(back_populates="role")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Role id={self.id} role={self.role!r}>"
+
+
+class RolePermission(Base):
+    """Що роль може робити в одному розділі.
+
+    Матриця живе в базі, а не в коді: ролей сім, розділів чотири, і тримати
+    це розсипаним по перевірках у хендлерах означало б шукати правду в
+    двадцяти місцях. Редагувати її з бота не можна — лише міграцією: право
+    змінювати права це те, з чого починаються тихі підвищення.
+    """
+
+    __tablename__ = "role_permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role_id: Mapped[int] = mapped_column(
+        ForeignKey("roles.id"), nullable=False, doc="Роль із довідника roles."
+    )
+    category: Mapped[str] = mapped_column(
+        Text, nullable=False, doc="Розділ: company, employees, vehicles, trips."
+    )
+
+    can_create: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", doc="C — створення."
+    )
+    can_read: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", doc="R — перегляд."
+    )
+    can_edit: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", doc="E — редагування."
+    )
+    can_delete: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", doc="D — видалення."
+    )
+
+    scope: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default=SCOPE_COMPANY,
+        server_default=SCOPE_COMPANY,
+        doc=(
+            "Наскільки широко діє право: own — лише свої записи, company — "
+            "у межах своєї компанії, all — без обмежень."
+        ),
+    )
+    fields: Mapped[str | None] = mapped_column(
+        Text,
+        doc=(
+            "Обмеження E на перелік полів, через кому. Порожнє — усі поля "
+            "розділу. Так оператор редагує лише маси, а диспетчер — лише статус."
+        ),
+    )
+
+    role: Mapped["Role"] = relationship(back_populates="permissions")
+
+    __table_args__ = (
+        UniqueConstraint("role_id", "category", name="uq_role_permissions_role_category"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<RolePermission role_id={self.role_id} category={self.category!r}>"
 
 
 class Employee(Base):

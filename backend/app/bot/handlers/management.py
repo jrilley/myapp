@@ -1,7 +1,11 @@
-﻿"""Керування співробітниками та довідником посад.
+﻿"""Компанія, співробітники та довідник посад.
 
-Доступно лише головному адміністратору. Кожен хендлер перевіряє право
-самостійно: приховати кнопку недостатньо, callback_data можна переслати.
+Що кому доступно, вирішує матриця прав (`access.can`). Довідники посад і
+ролей у ній не значаться — вони спільні для всіх компаній, тому лишаються
+головному адміністратору.
+
+Кожен хендлер перевіряє право самостійно: приховати кнопку недостатньо,
+callback_data можна переслати.
 """
 
 from html import escape
@@ -12,8 +16,17 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.access import ADMIN_ONLY, Access, resolve_company_id
-from app.bot.actions import render_company_employees, render_positions
+from app.bot.access import (
+    CATEGORY_COMPANY,
+    CATEGORY_EMPLOYEES,
+    DENIED,
+    EDIT,
+    READ,
+    Access,
+    resolve_company_id,
+)
+from app.bot.actions import render_company_employees, render_positions, render_roles
+from app.bot.guards import deny, deny_main_admin
 from app.bot.constants import (
     MAX_ADDRESS,
     MAX_COMPANY_NAME,
@@ -31,8 +44,10 @@ from app.bot.keyboards import (
     EMP_EDIT_PREFIX,
     EMP_SET_PREFIX,
     EMP_VIEW_PREFIX,
+    MENU_MY_COMPANY,
     MENU_MY_EMPLOYEES,
     MENU_POSITIONS,
+    MENU_ROLES,
     POSITION_ADD,
     POSITION_CARD_PREFIX,
     cancel_keyboard,
@@ -46,7 +61,7 @@ from app.models import Employee
 
 router = Router(name="management")
 
-DENIED = "Дія доступна лише головному адміністратору."
+MAIN_ADMIN_DENIED = "Дія доступна лише головному адміністратору."
 
 # Поле картки → (назва в БД, підпис, як дістати варіанти)
 CHOICE_FIELDS = {
@@ -66,24 +81,19 @@ CHOICE_FIELDS = {
 MAIN_ADMIN_FIELDS = frozenset({"role", "company", "position"})
 
 
-async def _deny(callback: CallbackQuery, access: Access) -> bool:
-    """Лише головний адмін — для довідників і картки компанії."""
-    if access.is_main_admin:
-        return False
-    await callback.answer(DENIED, show_alert=True)
-    return True
-
-
 async def _employee_or_denied(
-    callback: CallbackQuery, session: AsyncSession, access: Access, employee_id: int
+    callback: CallbackQuery,
+    session: AsyncSession,
+    access: Access,
+    employee_id: int,
+    right: str = READ,
 ) -> Employee | None:
-    """Співробітник, якого цьому адміну дозволено чіпати.
+    """Співробітник, якого цьому користувачу дозволено чіпати.
 
-    Головний — будь-якого; адміністратор компанії — лише зі своєї компанії,
-    навіть якщо дістане чужий id.
+    Хто має scope=all — будь-якого; решта — лише зі своєї компанії, навіть
+    якщо дістане чужий id.
     """
-    if not access.is_admin:
-        await callback.answer(ADMIN_ONLY, show_alert=True)
+    if await deny(callback, access, CATEGORY_EMPLOYEES, right):
         return None
 
     employee = await repository.get_employee(session, employee_id)
@@ -94,7 +104,7 @@ async def _employee_or_denied(
     if not access.is_main_admin and employee.company_id != resolve_company_id(
         access, None
     ):
-        await callback.answer(ADMIN_ONLY, show_alert=True)
+        await callback.answer(DENIED, show_alert=True)
         return None
     return employee
 
@@ -125,7 +135,8 @@ async def _show_card(
         else MENU_MY_EMPLOYEES
     )
     await message.answer(
-        _card(employee), reply_markup=employee_card_keyboard(employee.id, back)
+        _card(employee),
+        reply_markup=employee_card_keyboard(employee.id, back, access=access),
     )
 
 
@@ -139,14 +150,16 @@ async def on_company_card(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
     """Картка компанії — вхід у її транспорт і працівників."""
-    if await _deny(callback, access):
+    if await deny(callback, access, CATEGORY_COMPANY):
         return
-    raw_id = (callback.data or "").split(":", 1)[1]
-    if not raw_id.isdigit():
-        await callback.answer("Невідома компанія", show_alert=True)
+    # resolve_company_id тримає межу: хто не має scope=all, дивиться свою
+    # компанію, хоч би що прийшло в callback_data.
+    company_id = resolve_company_id(access, (callback.data or "").split(":", 1)[1])
+    if company_id is None:
+        await callback.answer(DENIED, show_alert=True)
         return
 
-    company = await repository.get_company(session, int(raw_id))
+    company = await repository.get_company(session, company_id)
     if company is None:
         await callback.answer("Компанію не знайдено", show_alert=True)
         return
@@ -154,7 +167,30 @@ async def on_company_card(
     await state.clear()
     await callback.answer()
     if callback.message is not None:
-        await _show_company(callback.message, company)
+        await _show_company(callback.message, company, access)
+
+
+@router.callback_query(F.data == MENU_MY_COMPANY)
+async def on_my_company(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    """Для всіх, крім головного адміна: своя компанія без кроку вибору."""
+    if await deny(callback, access, CATEGORY_COMPANY):
+        return
+    company_id = resolve_company_id(access, None)
+    company = (
+        await repository.get_company(session, company_id)
+        if company_id is not None
+        else None
+    )
+    if company is None:
+        await callback.answer("Компанію не знайдено", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        await _show_company(callback.message, company, access)
 
 
 def _company_card(company) -> str:
@@ -171,9 +207,9 @@ def _company_card(company) -> str:
     )
 
 
-async def _show_company(message, company) -> None:
+async def _show_company(message, company, access: Access) -> None:
     await message.answer(
-        _company_card(company), reply_markup=company_card_keyboard(company.id)
+        _company_card(company), reply_markup=company_card_keyboard(company.id, access)
     )
 
 
@@ -195,14 +231,19 @@ COMPANY_FIELDS = {
 async def on_company_edit(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    if await _deny(callback, access):
+    if await deny(callback, access, CATEGORY_COMPANY, EDIT):
         return
     parts = (callback.data or "").split(":")
     if len(parts) != 3 or parts[1] not in COMPANY_FIELDS or not parts[2].isdigit():
         await callback.answer("Невідоме поле", show_alert=True)
         return
 
-    company = await repository.get_company(session, int(parts[2]))
+    company_id = resolve_company_id(access, parts[2])
+    company = (
+        await repository.get_company(session, company_id)
+        if company_id is not None
+        else None
+    )
     if company is None:
         await callback.answer("Компанію не знайдено", show_alert=True)
         return
@@ -220,7 +261,7 @@ async def on_company_edit(
 async def edit_company_value(
     message: Message, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    if not access.is_main_admin:
+    if not access.can(CATEGORY_COMPANY, EDIT):
         await state.clear()
         await message.answer(DENIED)
         return
@@ -288,9 +329,11 @@ async def company_non_text(message: Message) -> None:
 async def on_company_employees(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
+    if await deny(callback, access, CATEGORY_EMPLOYEES):
+        return
     company_id = resolve_company_id(access, (callback.data or "").split(":", 1)[1])
     if company_id is None:
-        await callback.answer(ADMIN_ONLY, show_alert=True)
+        await callback.answer(DENIED, show_alert=True)
         return
     await state.clear()
     await callback.answer()
@@ -305,10 +348,12 @@ async def on_company_employees(
 async def on_my_employees(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    """Для адміністратора компанії — працівники його власної компанії."""
+    """Працівники власної компанії — без кроку вибору компанії."""
+    if await deny(callback, access, CATEGORY_EMPLOYEES):
+        return
     company_id = resolve_company_id(access, None)
     if company_id is None:
-        await callback.answer(ADMIN_ONLY, show_alert=True)
+        await callback.answer(DENIED, show_alert=True)
         return
     await state.clear()
     await callback.answer()
@@ -350,7 +395,7 @@ async def on_employee_edit(
     employee_id = int(raw_id)
 
     if field in MAIN_ADMIN_FIELDS and not access.is_main_admin:
-        await callback.answer(DENIED, show_alert=True)
+        await callback.answer(MAIN_ADMIN_DENIED, show_alert=True)
         return
 
     employee = await _employee_or_denied(callback, session, access, employee_id)
@@ -418,11 +463,11 @@ async def on_employee_set(
         return
 
     if field in MAIN_ADMIN_FIELDS and not access.is_main_admin:
-        await callback.answer(DENIED, show_alert=True)
+        await callback.answer(MAIN_ADMIN_DENIED, show_alert=True)
         return
 
     employee = await _employee_or_denied(
-        callback, session, access, int(raw_employee)
+        callback, session, access, int(raw_employee), EDIT
     )
     if employee is None:
         return
@@ -522,7 +567,7 @@ async def edit_phone2(
 async def on_positions(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    if await _deny(callback, access):
+    if await deny_main_admin(callback, access):
         return
     await state.clear()
     await callback.answer()
@@ -533,11 +578,26 @@ async def on_positions(
     await callback.message.answer(text, reply_markup=keyboard)
 
 
+@router.callback_query(F.data == MENU_ROLES)
+async def on_roles(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    """Матриця прав, як вона лежить у базі. Лише перегляд: право змінювати
+    права — це те, з чого починаються тихі підвищення."""
+    if await deny_main_admin(callback, access):
+        return
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        text, keyboard = await render_roles(session)
+        await callback.message.answer(text, reply_markup=keyboard)
+
+
 @router.callback_query(F.data == POSITION_ADD)
 async def on_position_add(
     callback: CallbackQuery, state: FSMContext, access: Access
 ) -> None:
-    if await _deny(callback, access):
+    if await deny_main_admin(callback, access):
         return
     await state.clear()
     await state.set_state(PositionForm.name)
@@ -577,7 +637,7 @@ async def position_name(
 async def on_position_card(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    if await _deny(callback, access):
+    if await deny_main_admin(callback, access):
         return
     raw_id = (callback.data or "").rsplit(":", 1)[-1]
     position = (

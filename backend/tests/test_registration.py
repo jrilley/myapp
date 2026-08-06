@@ -11,8 +11,8 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
-from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER
-from app.models import DEFAULT_POSITION, ROLE_DRIVER
+from app.bot.access import ROLE_DRIVER, ROLE_MAIN_ADMIN
+from app.models import DEFAULT_POSITION
 from app.bot.handlers.registration import (
     company_address,
     company_chat,
@@ -71,7 +71,6 @@ async def reference_data(session):
             company,
             position,
             Role(id=1, role=ROLE_MAIN_ADMIN),
-            Role(id=3, role=ROLE_USER),
             Role(id=4, role=ROLE_DRIVER),
         ]
     )

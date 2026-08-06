@@ -5,8 +5,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_publisher
 from app.bot import constants
-from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER, Access
+from app.bot.access import Permission, Access
 from app.bot.publisher import Sent
+from app.models import ROLE_DRIVER, ROLE_MAIN_ADMIN
+from app.permissions import DEFAULT_MATRIX
 from app.config import Settings, get_settings
 from app.db import Base, create_engine, get_db
 from app.main import create_app
@@ -78,22 +80,43 @@ class FakeCallback:
         self.answered.append(text)
 
 
+def permissions_for(role: str) -> dict[str, Permission]:
+    """Права ролі з тієї самої матриці, що йде в базу, — щоб тести не
+    перевіряли вигаданий набір."""
+    return {
+        category: Permission(
+            create=bool(create),
+            read=bool(read),
+            edit=bool(edit),
+            delete=bool(delete),
+            scope=scope,
+            fields=frozenset(fields.split(",")) if fields else None,
+        )
+        for category, (
+            create, read, edit, delete, scope, fields,
+        ) in DEFAULT_MATRIX.get(role, {}).items()
+    }
+
+
 def make_access(
     user_id: int = OWNER_ID,
     *,
-    role: str = ROLE_USER,
+    role: str = ROLE_DRIVER,
     registered: bool = True,
     bootstrap_admin: bool = False,
+    company_id: int = 1,
+    employee_id: int | None = None,
 ) -> Access:
-    """Access без походу в БД: він читає лише employee.role.role і fullname,
-    тож транзієнтних об'єктів достатньо."""
+    """Access без походу в БД: він читає employee.role.role, fullname і
+    готові права, тож транзієнтних об'єктів достатньо."""
     employee = None
     if registered:
         employee = Employee(
+            id=employee_id,
             tg_id=user_id,
             fullname="Тестовий Співробітник",
             phone_number="+380000000000",
-            company_id=1,
+            company_id=company_id,
             position_id=1,
             role_id=1,
         )
@@ -102,6 +125,7 @@ def make_access(
         telegram_user_id=user_id,
         employee=employee,
         bootstrap_admin=bootstrap_admin,
+        permissions=permissions_for(role),
     )
 
 

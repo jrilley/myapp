@@ -17,12 +17,14 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app import repository
 from app.bot.access import (
     ROLE_COMPANY_ADMIN,
+    ROLE_DRIVER,
+    ROLE_LOGIST,
     ROLE_MAIN_ADMIN,
-    ROLE_USER,
     Access,
 )
 from app.bot.actions import render_trips
 from app.bot.handlers.common import on_page
+from app.bot.access import DENIED as NO_RIGHTS
 from app.bot.handlers.trips import (
     DENIED,
     on_calendar_nav,
@@ -72,6 +74,7 @@ from tests.conftest import (
     FakeMessage,
     FakeUser,
     callback_data,
+    permissions_for,
 )
 
 CHIEF_ID = 4004
@@ -99,7 +102,8 @@ async def world(session):
             ours, theirs,
             Role(id=1, role=ROLE_MAIN_ADMIN),
             Role(id=2, role=ROLE_COMPANY_ADMIN),
-            Role(id=3, role=ROLE_USER),
+            Role(id=3, role=ROLE_DRIVER),
+            Role(id=4, role=ROLE_LOGIST),
             Position(id=1, position="Диспетчер"),
             Position(id=2, position="Логіст"),
         ]
@@ -115,7 +119,7 @@ async def world(session):
     return SimpleNamespace(
         ours=ours,
         theirs=theirs,
-        logist=await employee(OWNER_ID, ours, "Марія Диспетчер", "+380501112233", 1, 3),
+        logist=await employee(OWNER_ID, ours, "Марія Логіст", "+380501112233", 2, 4),
         boss=await employee(ADMIN_ID, ours, "Олег Логіст", "+380502223344", 2, 2),
         chief=await employee(CHIEF_ID, ours, "Головний Адмін", "+380509998877", 2, 1),
         driver=await employee(DRIVER_ID, ours, "Петро Водій", "+380507778899", 1, 3),
@@ -126,9 +130,17 @@ async def world(session):
 
 
 async def access_for(session, tg_id: int) -> Access:
-    """Access із реального рядка employees — потрібні справжні id."""
+    """Access із реального рядка employees — потрібні справжні id.
+
+    Права беремо з тієї самої матриці, що йде в базу: інакше тести
+    перевіряли б вигаданий набір.
+    """
     employee = await repository.get_employee_by_tg_id(session, tg_id)
-    return Access(telegram_user_id=tg_id, employee=employee)
+    return Access(
+        telegram_user_id=tg_id,
+        employee=employee,
+        permissions=permissions_for(employee.role.role),
+    )
 
 
 @pytest.fixture
@@ -275,7 +287,7 @@ async def test_client_and_logist_come_from_the_creator(
     assert trip.client_company_id == world.ours.id
     assert trip.exporter_company_id == world.theirs.id
     assert trip.created_by == world.logist.id
-    assert trip.logist_fullname == "Марія Диспетчер"
+    assert trip.logist_fullname == "Марія Логіст"
     assert trip.logist_phone_number == "+380501112233"
     assert trip.logist_tg == OWNER_ID
 
@@ -304,7 +316,18 @@ async def test_unregistered_cannot_start_a_trip(state, access_guest):
     await on_new_trip(callback, state, access_guest)
 
     assert await state.get_state() is None
-    assert "співробітник" in callback.message.answers[0]
+    assert callback.answered == [NO_RIGHTS]
+
+
+async def test_driver_cannot_start_a_trip(session, state, world):
+    """У водія на рейсах лише R: створення — не його справа."""
+    driver_access = await access_for(session, DRIVER_ID)
+    callback = FakeCallback(MENU_TRIP_NEW, user=FakeUser(DRIVER_ID))
+
+    await on_new_trip(callback, state, driver_access)
+
+    assert await state.get_state() is None
+    assert callback.answered == [NO_RIGHTS]
 
 
 async def test_bootstrap_admin_cannot_start_a_trip(state):
@@ -429,7 +452,7 @@ async def test_driver_list_offers_the_company_and_manual_entry(
     assert "Диспетчер, Петро Водій" in labels
     assert TRIP_DRIVER_MANUAL in data
     # Себе логіст у списку не бачить, чужу компанію — теж.
-    assert not any("Марія Диспетчер" in label for label in labels)
+    assert not any("Марія Логіст" in label for label in labels)
     assert not any("Чужий" in label for label in labels)
 
 
@@ -626,11 +649,22 @@ async def trips(session, world):
     )
 
 
-async def test_ordinary_user_sees_only_own_trips(session, logist, trips):
+async def test_driver_sees_only_own_trips(session, world, trips):
+    """У водія обсяг own: рейси, які він створив або в яких він водій."""
+    driver_access = await access_for(session, DRIVER_ID)
+
+    text, _ = await render_trips(session, driver_access)
+
+    assert "МІЙ" not in text
+    assert "КОЛЕГИ" not in text
+    assert "ЧУЖИЙ" not in text
+
+
+async def test_logist_sees_the_whole_company(session, logist, trips):
+    """У логіста обсяг company — і чужа компанія в нього не потрапляє."""
     text, _ = await render_trips(session, logist)
 
-    assert "МІЙ" in text
-    assert "КОЛЕГИ" not in text
+    assert "МІЙ" in text and "КОЛЕГИ" in text
     assert "ЧУЖИЙ" not in text
 
 
@@ -659,10 +693,12 @@ async def test_foreign_trip_cannot_be_opened_by_id(session, state, logist, trips
     assert not callback.message.answers
 
 
-async def test_colleague_trip_is_readable_only_by_the_admin(
-    session, state, logist, boss, trips
+async def test_colleague_trip_is_out_of_reach_for_a_driver(
+    session, state, world, boss, trips
 ):
-    for access, expected in ((logist, [DENIED]), (boss, [None])):
+    """Обсяг company відкриває рейс колеги, обсяг own — ні."""
+    driver_access = await access_for(session, DRIVER_ID)
+    for access, expected in ((driver_access, [DENIED]), (boss, [None])):
         callback = FakeCallback(f"{TRIP_SHOW_PREFIX}:{trips.colleague.id}")
         await on_trip_card(callback, state, session, access)
         assert callback.answered == expected
@@ -686,7 +722,7 @@ async def test_card_shows_both_companies(session, state, chief, trips):
     text = callback.message.answers[0]
     assert "Alebor IT 000000" in text
     assert "ТОВ Чужа 99999999" in text
-    assert "Марія Диспетчер" in text
+    assert "Марія Логіст" in text
 
 
 # ---------------------------------------------------------------------------

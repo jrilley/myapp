@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "52b42532acfc",
+  "alembic_head": "6a3a66f4347b",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -681,6 +681,195 @@
           "on_delete": null,
           "on_update": null
         },
+        {
+          "columns": [
+            "role_id"
+          ],
+          "references": [
+            "roles.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        }
+      ],
+      "indexes": []
+    },
+    "role_permissions": {
+      "description": "Що роль може робити в одному розділі.",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "role_id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": "roles.id",
+          "description": "Роль із довідника roles."
+        },
+        {
+          "name": "category",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Розділ: company, employees, vehicles, trips."
+        },
+        {
+          "name": "can_create",
+          "type": {
+            "generic": "BOOLEAN",
+            "sqlite": "BOOLEAN",
+            "postgresql": "BOOLEAN"
+          },
+          "python_type": "bool",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": false,
+          "server_default": "0",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "C — створення."
+        },
+        {
+          "name": "can_read",
+          "type": {
+            "generic": "BOOLEAN",
+            "sqlite": "BOOLEAN",
+            "postgresql": "BOOLEAN"
+          },
+          "python_type": "bool",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": false,
+          "server_default": "0",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "R — перегляд."
+        },
+        {
+          "name": "can_edit",
+          "type": {
+            "generic": "BOOLEAN",
+            "sqlite": "BOOLEAN",
+            "postgresql": "BOOLEAN"
+          },
+          "python_type": "bool",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": false,
+          "server_default": "0",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "E — редагування."
+        },
+        {
+          "name": "can_delete",
+          "type": {
+            "generic": "BOOLEAN",
+            "sqlite": "BOOLEAN",
+            "postgresql": "BOOLEAN"
+          },
+          "python_type": "bool",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": false,
+          "server_default": "0",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "D — видалення."
+        },
+        {
+          "name": "scope",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": "company",
+          "server_default": "company",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Наскільки широко діє право: own — лише свої записи, company — у межах своєї компанії, all — без обмежень."
+        },
+        {
+          "name": "fields",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Обмеження E на перелік полів, через кому. Порожнє — усі поля розділу. Так оператор редагує лише маси, а диспетчер — лише статус."
+        }
+      ],
+      "unique_constraints": [
+        [
+          "role_id",
+          "category"
+        ]
+      ],
+      "foreign_keys": [
         {
           "columns": [
             "role_id"

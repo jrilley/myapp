@@ -47,7 +47,7 @@ from _sheet import (  # noqa: E402
 MENU_BUTTONS = [
     ("«Зареєструватися»", "гості", "Анкета реєстрації: рядок у employees."),
     ("«Новий рейс»", "зареєстровані", "Рейс за ТТН, десять кроків — аркуш 4."),
-    ("«Рейси»", "зареєстровані", "Свої рейси; адмінам — компанії або всі."),
+    ("«Рейси»", "зареєстровані", "Обсяг — за роллю; матриця на аркуші 4."),
     ("«Нова заявка»", "зареєстровані", "Починає анкету з першого кроку."),
     ("«Мої заявки»", "зареєстровані", "Свої заявки, до 10, з кнопкою видалення."),
     ("«Усі заявки»", "адміни", "Останні 10 заявок усіх користувачів, з автором."),
@@ -173,7 +173,7 @@ def page_route(s: Sheet) -> None:
         "джерело правди: публікація в групу може не вдатись, і це не втратить заявку.",
         size=8.6, leading=11.5,
     )
-    s.text(s.W - M, 76, "аркуш 1 / 4", font="Mono", size=8, color=SLATE, align="right")
+    s.text(s.W - M, 76, "аркуш 1 / 5", font="Mono", size=8, color=SLATE, align="right")
 
     # ---- головний тракт ----
     top = 150
@@ -310,7 +310,7 @@ def page_schema(s: Sheet) -> None:
            "показує, чи потрапляє поле у публічну відповідь API; решта доступна "
            "лише за адмін-токеном X-Admin-Token. Решта таблиць — на аркуші 3.",
            size=8.6, leading=11.5)
-    s.text(s.W - M, 76, "аркуш 2 / 4", font="Mono", size=8, color=SLATE, align="right")
+    s.text(s.W - M, 76, "аркуш 2 / 5", font="Mono", size=8, color=SLATE, align="right")
 
     # ---- таблиця-сутність ----
     tx, tw = M, 700
@@ -433,6 +433,17 @@ ORG_TABLES = {
         ("id", "INTEGER", "PK"),
         ("role", "TEXT NOT NULL", "UQ"),
     ],
+    "role_permissions": [
+        ("id", "INTEGER", "PK"),
+        ("role_id", "INTEGER NOT NULL", "FK"),
+        ("category", "TEXT NOT NULL", "UQ"),
+        ("can_create", "BOOLEAN NOT NULL", ""),
+        ("can_read", "BOOLEAN NOT NULL", ""),
+        ("can_edit", "BOOLEAN NOT NULL", ""),
+        ("can_delete", "BOOLEAN NOT NULL", ""),
+        ("scope", "TEXT NOT NULL", ""),
+        ("fields", "TEXT", ""),
+    ],
     "employees": [
         ("id", "INTEGER", "PK"),
         ("tg_id", "BIGINT NOT NULL", "UQ"),
@@ -444,6 +455,18 @@ ORG_TABLES = {
         ("role_id", "INTEGER NOT NULL", "FK"),
     ],
 }
+
+
+#: роль → (компанія, працівники, транспорт, рейси), обсяг
+MATRIX_ROWS = [
+    ("Головний адміністратор", ("CRED", "CRED", "CRED", "CRED"), "усі компанії"),
+    ("Адміністратор компанії", ("RE", "RE", "CRED", "CRED"), "своя компанія"),
+    ("Менеджер", ("R", "R", "—", "CRED"), "своя компанія"),
+    ("Логіст", ("R", "R", "CRE", "CRED"), "своя компанія"),
+    ("Оператор", ("R", "—", "—", "RE — лише маси"), "своя компанія"),
+    ("Диспетчер", ("R", "—", "—", "RE — лише статус"), "своя компанія"),
+    ("Водій", ("—", "—", "—", "R"), "лише свої рейси"),
+]
 
 
 VEHICLE_COLUMNS = [
@@ -467,11 +490,10 @@ def page_organization(s: Sheet) -> None:
            "Реєстрація в боті створює рядок у employees: ПІБ, номер телефону "
            "(кнопкою «Поділитися номером»), необов'язковий другий номер, "
            "і компанія зі списку. Посада й роль у всіх нових однакові — «Водій»; "
-           "змінює їх головний адміністратор. Транспорт прив'язаний до компанії. Рейси (аркуш 4) "
-           "посилаються і на company, і на employees; із заявками (аркуш 2) ці "
-           "таблиці не пов'язані.",
+           "змінює їх головний адміністратор. Права дає не посада, а роль — через "
+           "матрицю role_permissions унизу аркуша.",
            size=8.6, leading=11.5)
-    s.text(s.W - M, 76, "аркуш 3 / 4", font="Mono", size=8, color=SLATE, align="right")
+    s.text(s.W - M, 76, "аркуш 3 / 5", font="Mono", size=8, color=SLATE, align="right")
 
     left_x, left_w = M, 330
     right_x, right_w = 620, 380
@@ -536,7 +558,7 @@ def page_organization(s: Sheet) -> None:
     for i, (left, right) in enumerate((
         ("новий співробітник", "посада «Водій» і роль «Водій» — анкета їх не питає"),
         ("будь-яка інша посада", "призначає головний адміністратор, з картки"),
-        ("роль доступу", "лише вручну, з картки; від посади не залежить"),
+        ("права", "дає роль, а не посада — матриця на аркуші 4"),
     )):
         row_ty = ty3 + 12 + i * 16
         s.text(M, row_ty, left, font="Sans-Bold", size=8, color=INK)
@@ -632,7 +654,7 @@ def page_trip(s: Sheet) -> None:
            "ручний ввід, і тоді кроків одинадцять. Решта колонок заповнюється "
            "вже після створення.",
            size=8.6, leading=11.5)
-    s.text(s.W - M, 76, "аркуш 4 / 4", font="Mono", size=8, color=SLATE, align="right")
+    s.text(s.W - M, 76, "аркуш 5 / 5", font="Mono", size=8, color=SLATE, align="right")
 
     col_w, gap = 350, 30
     xs = [M + i * (col_w + gap) for i in range(3)]
@@ -681,6 +703,110 @@ def page_trip(s: Sheet) -> None:
            font="Mono", size=7, color=SLATE)
 
 
+# --------------------------------------------------------------------------
+# Сторінка 4 — ролі й права
+# --------------------------------------------------------------------------
+PERMISSION_COLUMNS = [
+    ("id", "INTEGER", "PK"),
+    ("role_id", "INTEGER NOT NULL", "FK"),
+    ("category", "TEXT NOT NULL", "UQ"),
+    ("can_create", "BOOLEAN NOT NULL", ""),
+    ("can_read", "BOOLEAN NOT NULL", ""),
+    ("can_edit", "BOOLEAN NOT NULL", ""),
+    ("can_delete", "BOOLEAN NOT NULL", ""),
+    ("scope", "TEXT NOT NULL", ""),
+    ("fields", "TEXT", ""),
+]
+
+SCOPES = [
+    ("all", "усі компанії — лише головний адміністратор"),
+    ("company", "у межах своєї компанії"),
+    ("own", "лише свої записи: створені або де людина водій"),
+]
+
+MENU_BY_ROLE = [
+    ("Головний адміністратор", "Новий рейс · Рейси · Додати автомобіль · Компанії · Посади · Ролі"),
+    ("Адміністратор компанії", "Новий рейс · Рейси · Додати автомобіль · Транспорт · Працівники · Моя компанія"),
+    ("Менеджер", "Новий рейс · Рейси · Працівники · Моя компанія"),
+    ("Логіст", "Новий рейс · Рейси · Додати автомобіль · Транспорт · Працівники · Моя компанія"),
+    ("Оператор", "Рейси · Моя компанія"),
+    ("Диспетчер", "Рейси · Моя компанія"),
+    ("Водій", "Рейси"),
+]
+
+
+def page_roles(s: Sheet) -> None:
+    s.background()
+    M = 40
+
+    s.eyebrow(M, 46, "myapp · схема системи", color=TEAL)
+    s.text(M, 76, "Ролі й права", font="Sans-Bold", size=25, color=INK)
+    s.wrap(M, 96, 760,
+           "Права — це матриця роль × розділ × CRED плюс обсяг: усі компанії, "
+           "своя компанія або лише свої записи. Вона лежить у таблиці, а не "
+           "розсипана перевірками по хендлерах, тож правду про доступ можна "
+           "прочитати в одному місці. Змінюється міграцією, не з бота: право "
+           "змінювати права — це те, з чого починаються тихі підвищення.",
+           size=8.6, leading=11.5)
+    s.text(s.W - M, 76, "аркуш 4 / 5", font="Mono", size=8, color=SLATE,
+           align="right")
+
+    left_w = 330
+    ty = s.section(M, 170, left_w, "структура")
+    bottom, _ = s.entity(M, ty, left_w, "role_permissions", PERMISSION_COLUMNS)
+
+    ty_scope = s.section(M, bottom + 30, left_w, "обсяг")
+    for i, (name, note) in enumerate(SCOPES):
+        row = ty_scope + 12 + i * 26
+        s.box(M, row - 11, 74, 15, fill=PANEL_ALT, stroke=LINE_SOFT)
+        s.text(M + 8, row, name, font="Mono", size=7.2, color=SLATE)
+        s.wrap(M + 84, row, left_w - 84, note, size=7.4, leading=9)
+
+    right_x = M + left_w + 40
+    right_w = s.W - M - right_x
+    ty2 = s.section(right_x, 170,
+                    right_w,
+                    "c створення · r перегляд · e редагування · d видалення")
+
+    col = [right_x, right_x + 190, right_x + 300, right_x + 410, right_x + 520]
+    s.text(col[0], ty2 + 10, "Роль", font="Mono-Bold", size=7, color=SLATE)
+    for i, title in enumerate(("Компанія", "Працівники", "Транспорт", "Рейси"),
+                              start=1):
+        s.text(col[i], ty2 + 10, title, font="Mono-Bold", size=7, color=SLATE)
+
+    for i, (role, cells, scope) in enumerate(MATRIX_ROWS):
+        row = ty2 + 32 + i * 25
+        s.line(right_x, row - 16, s.W - M, row - 16, color=LINE_SOFT, width=0.5)
+        s.text(col[0], row, role, font="Sans-Bold", size=8, color=INK)
+        s.text(col[0], row + 10, scope, font="Mono", size=6.8, color=SLATE)
+        for j, cell in enumerate(cells, start=1):
+            s.text(col[j], row, cell, font="Mono", size=7.5,
+                   color=INK if cell != "—" else LINE)
+
+    note_ty = ty2 + 32 + len(MATRIX_ROWS) * 25 + 8
+    s.box(right_x, note_ty, right_w, 62, fill=AMBER_SOFT, stroke=AMBER_SOFT)
+    s.line(right_x, note_ty, right_x, note_ty + 62, color=AMBER, width=2.5)
+    s.wrap(right_x + 12, note_ty + 18, right_w - 24,
+           "Головного адміністратора в таблиці немає взагалі: його доступ — "
+           "окремий об'єкт у коді, щоб зняти його не могла ні міграція, ні "
+           "описка в рядку. Право E буває звужене до переліку полів: оператор "
+           "має E на рейсах, але лише на масах, диспетчер — лише на статусі.",
+           size=8, leading=10.5, color=AMBER)
+
+    ty3 = s.section(M, 620, s.W - 2 * M, "меню будується з тієї самої матриці")
+    for i, (role, buttons) in enumerate(MENU_BY_ROLE):
+        row = ty3 + 12 + i * 15
+        s.text(M, row, role, font="Sans-Bold", size=8, color=INK)
+        s.text(M + 200, row, buttons, font="Mono", size=7.2, color=SLATE)
+
+    s.line(M, s.H - 34, s.W - M, s.H - 34, color=LINE, width=0.6)
+    s.text(M, s.H - 22,
+           "Кнопки й перевірки в хендлерах питають той самий access.can, тож "
+           "розійтись не можуть. Приховати кнопку при цьому не є захистом — "
+           "callback_data можна підробити, і право перевіряється ще раз.",
+           font="Mono", size=7, color=SLATE)
+
+
 def main() -> None:
     register_fonts()
 
@@ -699,6 +825,8 @@ def main() -> None:
     page_schema(sheet)
     c.showPage()
     page_organization(sheet)
+    c.showPage()
+    page_roles(sheet)
     c.showPage()
     page_trip(sheet)
     c.showPage()

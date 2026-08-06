@@ -11,7 +11,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
-from app.bot.access import ROLE_COMPANY_ADMIN, Access
+from app.bot.access import DENIED as NO_RIGHTS, ROLE_COMPANY_ADMIN, Access
 from app.bot.handlers.vehicles import (
     on_add_vehicle,
     step_brand,
@@ -36,6 +36,7 @@ from tests.conftest import (
     FakeMessage,
     FakeUser,
     callback_data,
+    permissions_for,
 )
 
 
@@ -73,7 +74,11 @@ async def company_admin(session, companies):
         role_id=2,
     )
     employee.role = Role(id=2, role=ROLE_COMPANY_ADMIN)
-    return Access(telegram_user_id=OWNER_ID, employee=employee), second
+    return Access(
+        telegram_user_id=OWNER_ID,
+        employee=employee,
+        permissions=permissions_for(ROLE_COMPANY_ADMIN),
+    ), second
 
 
 async def _fill_fields(state, session, *, plate="AA1234BB"):
@@ -301,4 +306,4 @@ async def test_ordinary_user_cannot_add_a_vehicle(session, state, access):
     await on_add_vehicle(callback, state, access)
 
     assert await state.get_state() is None
-    assert callback.answered == ["Дія доступна лише адміністраторам."]
+    assert callback.answered == [NO_RIGHTS]

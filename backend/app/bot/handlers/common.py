@@ -8,7 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # можна перемкнути в рантаймі (див. app/bot/constants.py).
 from app.bot import constants
 from app.bot.access import (
-    ADMIN_ONLY,
+    CATEGORY_EMPLOYEES,
+    CATEGORY_TRIPS,
+    CATEGORY_VEHICLES,
+    DENIED,
     MAIN_ADMIN_ONLY,
     Access,
     resolve_company_id,
@@ -74,17 +77,13 @@ APPLICATIONS_OFF = "Заявки наразі вимкнені — корист�
 
 
 def menu_for(access: Access):
-    return main_menu_keyboard(
-        is_registered=access.is_registered,
-        is_admin=access.is_admin,
-        is_main_admin=access.is_main_admin,
-    )
+    return main_menu_keyboard(access)
 
 
 def _help_text(access: Access) -> str:
     if not access.is_registered:
         return HELP_GUEST
-    return HELP_REGISTERED + (ADMIN_HELP if access.is_admin else "")
+    return HELP_REGISTERED + (ADMIN_HELP if access.is_main_admin else "")
 
 
 async def _reject_applications(callback: CallbackQuery) -> bool:
@@ -95,11 +94,11 @@ async def _reject_applications(callback: CallbackQuery) -> bool:
 
 
 async def _reject_non_admin(callback: CallbackQuery, access: Access) -> bool:
-    """Кнопку видно лише адмінам, але це не захист: callback_data можна
-    переслати або підробити. Тому право перевіряємо на кожному виклику."""
-    if access.is_admin:
+    """Спільні списки заявок — лише головному адміну. Заявки вимкнені
+    прапорцем, тож ця гілка зараз недосяжна, але право перевіряється."""
+    if access.is_main_admin:
         return False
-    await callback.answer("Дія доступна лише адміністраторам.", show_alert=True)
+    await callback.answer(MAIN_ADMIN_ONLY, show_alert=True)
     return True
 
 
@@ -239,7 +238,10 @@ async def on_page(
             return
         rendered = await render_all_applications(session, offset=offset)
     elif kind == "trips":
-        # Обсяг видимого визначає render_trips за роллю — у callback_data
+        if not access.can(CATEGORY_TRIPS):
+            await callback.answer(DENIED, show_alert=True)
+            return
+        # Обсяг видимого визначає render_trips за правами — у callback_data
         # немає нічого, чим його можна було б розширити.
         rendered = await render_trips(session, access, offset=offset)
     elif kind in ("pos", "comp"):
@@ -252,17 +254,23 @@ async def on_page(
             else await render_companies(session, offset=offset)
         )
     elif kind == "cemp" and args:
+        if not access.can(CATEGORY_EMPLOYEES):
+            await callback.answer(DENIED, show_alert=True)
+            return
         company_id = resolve_company_id(access, args[0])
         if company_id is None:
-            await callback.answer(ADMIN_ONLY, show_alert=True)
+            await callback.answer(DENIED, show_alert=True)
             return
         rendered = await render_company_employees(
             session, company_id, offset=offset, is_main_admin=access.is_main_admin
         )
     elif kind == "veh" and len(args) == 2:
+        if not access.can(CATEGORY_VEHICLES):
+            await callback.answer(DENIED, show_alert=True)
+            return
         company_id = resolve_company_id(access, args[1])
         if company_id is None:
-            await callback.answer(ADMIN_ONLY, show_alert=True)
+            await callback.answer(DENIED, show_alert=True)
             return
         rendered = await render_company_vehicles(
             session, args[0], company_id, offset=offset,
@@ -302,7 +310,7 @@ async def on_delete(
     # Перемальовуємо список на місці, щоб видалений запис одразу зник.
     # Адміну показуємо загальний список, решті — свій.
     if ok and callback.message is not None:
-        if access.is_admin:
+        if access.is_main_admin:
             text, keyboard = await render_all_applications(session)
         else:
             text, keyboard = await render_own_applications(

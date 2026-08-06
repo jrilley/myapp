@@ -12,6 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
 from app.bot.constants import CATEGORIES
+from app.bot.access import MAIN_ADMIN_ONLY
 from app.bot.handlers.common import (
     APPLICATIONS_OFF,
     cmd_start,
@@ -35,6 +36,8 @@ from app.bot.keyboards import (
     MENU_MY,
     MENU_NEW,
     MENU_POSITIONS,
+    MENU_MY_COMPANY,
+    MENU_ROLES,
     MENU_STATS,
     MENU_TRIP_NEW,
     MENU_TRIPS,
@@ -53,28 +56,28 @@ from tests.conftest import (
     make_access,
 )
 
-#: Меню за замовчуванням: стара анкета заявок вимкнена прапорцем
-#: constants.SHOW_APPLICATIONS, тож її кнопок тут немає.
-USER_MENU = [MENU_TRIP_NEW, MENU_TRIPS, MENU_HELP]
+#: Меню виводиться з матриці прав, тож ці списки — її прямий наслідок.
+#: Стара анкета заявок вимкнена прапорцем constants.SHOW_APPLICATIONS.
+DRIVER_MENU = [MENU_TRIPS, MENU_HELP]
 #: Головний адмін заходить у транспорт і працівників через компанію.
 ADMIN_MENU = [
     MENU_TRIP_NEW, MENU_TRIPS, MENU_VEHICLE_ADD,
-    MENU_COMPANIES, MENU_POSITIONS, MENU_HELP,
+    MENU_COMPANIES, MENU_POSITIONS, MENU_ROLES, MENU_HELP,
 ]
 #: Адміністратор компанії бачить лише свою, тож заходить напряму.
 COMPANY_ADMIN_MENU = [
     MENU_TRIP_NEW, MENU_TRIPS, MENU_VEHICLE_ADD,
-    MENU_MY_VEHICLES, MENU_MY_EMPLOYEES, MENU_HELP,
+    MENU_MY_VEHICLES, MENU_MY_EMPLOYEES, MENU_MY_COMPANY, MENU_HELP,
 ]
 GUEST_MENU = [REG_START, MENU_HELP]
 
 #: Те саме меню з увімкненими заявками — на випадок повернення прапорця.
-USER_MENU_WITH_APPLICATIONS = [
-    MENU_TRIP_NEW, MENU_TRIPS, MENU_NEW, MENU_MY, MENU_HELP,
+DRIVER_MENU_WITH_APPLICATIONS = [
+    MENU_TRIPS, MENU_NEW, MENU_MY, MENU_HELP,
 ]
 ADMIN_MENU_WITH_APPLICATIONS = [
     MENU_TRIP_NEW, MENU_TRIPS, MENU_NEW, MENU_MY, MENU_ALL, MENU_STATS,
-    MENU_VEHICLE_ADD, MENU_COMPANIES, MENU_POSITIONS, MENU_HELP,
+    MENU_VEHICLE_ADD, MENU_COMPANIES, MENU_POSITIONS, MENU_ROLES, MENU_HELP,
 ]
 
 
@@ -108,7 +111,7 @@ async def test_start_shows_menu_instead_of_bare_text(state, access):
 
     await cmd_start(message, state, access)
 
-    assert callback_data(message.markups[0]) == USER_MENU
+    assert callback_data(message.markups[0]) == DRIVER_MENU
 
 
 async def test_menu_depends_on_who_opened_it(state, access, access_admin, access_guest):
@@ -118,7 +121,7 @@ async def test_menu_depends_on_who_opened_it(state, access, access_admin, access
     await cmd_start(admin, state, access_admin)
     await cmd_start(guest, state, access_guest)
 
-    assert callback_data(plain.markups[0]) == USER_MENU
+    assert callback_data(plain.markups[0]) == DRIVER_MENU
     assert callback_data(admin.markups[0]) == ADMIN_MENU
     # Незареєстрованому нема чого пропонувати, крім реєстрації.
     assert callback_data(guest.markups[0]) == GUEST_MENU
@@ -133,7 +136,7 @@ async def test_applications_come_back_with_the_flag(
     await cmd_start(plain, state, access)
     await cmd_start(admin, state, access_admin)
 
-    assert callback_data(plain.markups[0]) == USER_MENU_WITH_APPLICATIONS
+    assert callback_data(plain.markups[0]) == DRIVER_MENU_WITH_APPLICATIONS
     assert callback_data(admin.markups[0]) == ADMIN_MENU_WITH_APPLICATIONS
 
 
@@ -199,7 +202,7 @@ async def test_cancel_button_works_from_any_step(state, access, applications_ena
     await on_cancel(callback, state, access)
 
     assert await state.get_state() is None
-    assert callback_data(callback.message.markups[0]) == USER_MENU_WITH_APPLICATIONS
+    assert callback_data(callback.message.markups[0]) == DRIVER_MENU_WITH_APPLICATIONS
 
 
 async def test_category_step_offers_cancel_alongside_categories(state, access, applications_enabled):
@@ -296,7 +299,7 @@ async def test_admin_actions_reject_a_non_admin(session, state, access, applicat
 
         await handler(callback, state, session, access)
 
-        assert callback.answered == ["Дія доступна лише адміністраторам."]
+        assert callback.answered == [MAIN_ADMIN_ONLY]
         assert not callback.message.answers
 
 
@@ -355,4 +358,4 @@ async def test_help_and_back_return_the_menu(state, access):
     await on_back(back_callback, state, access)
 
     for callback in (help_callback, back_callback):
-        assert callback_data(callback.message.markups[0]) == USER_MENU
+        assert callback_data(callback.message.markups[0]) == DRIVER_MENU

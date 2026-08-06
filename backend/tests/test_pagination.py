@@ -11,7 +11,12 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
-from app.bot.access import ROLE_MAIN_ADMIN, ROLE_USER
+from app.bot.access import (
+    DENIED as NO_RIGHTS,
+    MAIN_ADMIN_ONLY,
+    ROLE_DRIVER,
+    ROLE_MAIN_ADMIN,
+)
 from app.bot.handlers.common import on_my, on_noop, on_page
 from app.bot.keyboards import (
     MENU_BACK,
@@ -173,7 +178,7 @@ async def test_all_applications_page_rejects_non_admin(session, access):
 
     await on_page(callback, session, access)
 
-    assert callback.answered == ["Дія доступна лише адміністраторам."]
+    assert callback.answered == [MAIN_ADMIN_ONLY]
     assert not callback.message.edits
 
 
@@ -183,18 +188,18 @@ async def test_reference_pages_reject_non_main_admin(session, access, kind):
 
     await on_page(callback, session, access)
 
-    assert callback.answered == ["Дія доступна лише головному адміністратору."]
+    assert callback.answered == [MAIN_ADMIN_ONLY]
     assert not callback.message.edits
 
 
 @pytest.mark.parametrize("payload", ["cemp:1", "veh:truck:1"])
-async def test_company_scoped_pages_reject_non_admin(session, access, payload):
-    """Списки всередині компанії — лише для адміністраторів."""
+async def test_company_scoped_pages_reject_without_the_right(session, access, payload):
+    """У водія немає ні працівників, ні транспорту — гортати нічого."""
     callback = FakeCallback(f"{PAGE_PREFIX}:{payload}:0", user=FakeUser(OWNER_ID))
 
     await on_page(callback, session, access)
 
-    assert callback.answered == ["Дія доступна лише адміністраторам."]
+    assert callback.answered == [NO_RIGHTS]
     assert not callback.message.edits
 
 
@@ -233,7 +238,7 @@ async def test_page_counter_is_answered(session):
 async def test_reference_lists_paginate(session):
     admin = make_access(ADMIN_ID, role=ROLE_MAIN_ADMIN)
     session.add(Role(id=1, role=ROLE_MAIN_ADMIN))
-    session.add(Role(id=3, role=ROLE_USER))
+    session.add(Role(id=3, role=ROLE_DRIVER))
     for index in range(PAGE_REFERENCE + 2):
         session.add(Position(position=f"Посада {index:02d}"))
         session.add(

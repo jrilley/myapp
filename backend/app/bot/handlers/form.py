@@ -47,11 +47,7 @@ async def _start_form(state: FSMContext) -> None:
 
 
 def _menu(access: Access):
-    return main_menu_keyboard(
-        is_registered=access.is_registered,
-        is_admin=access.is_admin,
-        is_main_admin=access.is_main_admin,
-    )
+    return main_menu_keyboard(access)
 
 
 @router.message(Command("new"))
@@ -99,11 +95,7 @@ async def on_cancel(
     if callback.message is not None:
         await callback.message.answer(
             "Заповнення скасовано.",
-            reply_markup=main_menu_keyboard(
-                is_registered=access.is_registered,
-                is_admin=access.is_admin,
-                is_main_admin=access.is_main_admin,
-            ),
+            reply_markup=main_menu_keyboard(access),
         )
 
 
@@ -234,11 +226,7 @@ async def step_reject(
     if callback.message is not None:
         await callback.message.answer(
             "Заявку не надіслано.",
-            reply_markup=main_menu_keyboard(
-                is_registered=access.is_registered,
-                is_admin=access.is_admin,
-                is_main_admin=access.is_main_admin,
-            ),
+            reply_markup=main_menu_keyboard(access),
         )
 
 

@@ -17,6 +17,7 @@ from app.models import (
     Employee,
     Position,
     Role,
+    RolePermission,
     Trailer,
     Trip,
     Truck,
@@ -428,6 +429,17 @@ async def list_company_vehicles(
     return list(await session.scalars(stmt)), int(total or 0)
 
 
+async def delete_vehicle(session: AsyncSession, vehicle: Truck | Trailer) -> None:
+    """Транспорт стирається назовсім, на відміну від рейсу.
+
+    М'яке видалення тут нічого не дало б: історія перевезень зберігає марку
+    й номер копією в самому рейсі, тож на неї це не впливає. А ось унікальний
+    держномер лишався б зайнятим назавжди.
+    """
+    await session.delete(vehicle)
+    await session.commit()
+
+
 async def update_vehicle(
     session: AsyncSession, vehicle: Truck | Trailer, **fields
 ) -> Truck | Trailer:
@@ -578,6 +590,18 @@ async def soft_delete_trip(session: AsyncSession, trip: Trip, *, deleted_by: int
     trip.deleted_at = _utc_now()
     await session.commit()
     return trip
+
+
+async def list_role_permissions(
+    session: AsyncSession, role_id: int
+) -> list[RolePermission]:
+    """Права ролі по розділах. Один запит на апдейт — його робить
+    AccessMiddleware, хендлери працюють уже з готовим Access."""
+    return list(
+        await session.scalars(
+            select(RolePermission).where(RolePermission.role_id == role_id)
+        )
+    )
 
 
 async def list_roles(session: AsyncSession) -> list[Role]:

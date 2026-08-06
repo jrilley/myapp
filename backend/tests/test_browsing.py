@@ -11,10 +11,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
 from app.bot.access import (
-    ADMIN_ONLY,
+    DENIED as NO_RIGHTS,
     ROLE_COMPANY_ADMIN,
     ROLE_MAIN_ADMIN,
-    ROLE_USER,
+    ROLE_DRIVER,
     Access,
 )
 from app.bot.handlers.management import on_company_card, on_company_employees
@@ -45,6 +45,7 @@ from tests.conftest import (
     FakeMessage,
     FakeUser,
     callback_data,
+    permissions_for,
 )
 
 
@@ -66,7 +67,7 @@ async def two_companies(session):
             ours, theirs, position,
             Role(id=1, role=ROLE_MAIN_ADMIN),
             Role(id=2, role=ROLE_COMPANY_ADMIN),
-            Role(id=3, role=ROLE_USER),
+            Role(id=3, role=ROLE_DRIVER),
         ]
     )
     await session.commit()
@@ -97,7 +98,11 @@ def company_admin(two_companies):
         phone_number="+380000000000", position_id=1, role_id=2,
     )
     employee.role = Role(id=2, role=ROLE_COMPANY_ADMIN)
-    return Access(telegram_user_id=OWNER_ID, employee=employee)
+    return Access(
+        telegram_user_id=OWNER_ID,
+        employee=employee,
+        permissions=permissions_for(ROLE_COMPANY_ADMIN),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +219,7 @@ async def test_company_admin_cannot_open_a_foreign_vehicle(
 
     await on_vehicle_card(callback, state, session, company_admin)
 
-    assert callback.answered == [ADMIN_ONLY]
+    assert callback.answered == [NO_RIGHTS]
     assert not callback.message.answers
 
 
@@ -230,13 +235,18 @@ async def test_company_admin_skips_company_selection(
     assert f"{VEHICLE_LIST_PREFIX}:truck:{ours.id}:0" in data
 
 
-async def test_company_card_is_main_admin_only(session, state, company_admin, two_companies):
-    ours, _ = two_companies
-    callback = FakeCallback(f"{COMPANY_CARD_PREFIX}:{ours.id}", user=FakeUser(OWNER_ID))
+async def test_company_card_shows_only_your_own(
+    session, state, company_admin, two_companies
+):
+    """Адміністратор компанії має R на компанію — але лише на свою.
+    Підставлений id чужої має привести його до власної картки."""
+    _, theirs = two_companies
+    callback = FakeCallback(f"{COMPANY_CARD_PREFIX}:{theirs.id}", user=FakeUser(OWNER_ID))
 
     await on_company_card(callback, state, session, company_admin)
 
-    assert callback.answered == ["Дія доступна лише головному адміністратору."]
+    assert "Alebor IT" in callback.message.answers[0]
+    assert "ТОВ Чужа" not in callback.message.answers[0]
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +273,7 @@ async def test_editing_brand_updates_the_row(
     await on_vehicle_edit(callback, state, session, access_admin)
     assert await state.get_state() == VehicleEdit.brand
 
-    await edit_brand(FakeMessage("Renault"), state, session)
+    await edit_brand(FakeMessage("Renault"), state, session, access_admin)
 
     updated = await repository.get_vehicle(session, "truck", truck.id)
     assert updated.brand == "Renault"
@@ -278,7 +288,7 @@ async def test_editing_plate_rejects_a_taken_number(
     await state.update_data(kind="truck", vehicle_id=truck.id)
     message = FakeMessage("BB2222BB")  # номер іншого тягача
 
-    await edit_plate(message, state, session)
+    await edit_plate(message, state, session, access_admin)
 
     assert await state.get_state() == VehicleEdit.license_plate
     assert "уже є" in message.answers[0]
@@ -292,7 +302,7 @@ async def test_keeping_own_plate_is_not_a_conflict(
     await state.set_state(VehicleEdit.license_plate)
     await state.update_data(kind="truck", vehicle_id=truck.id)
 
-    await edit_plate(FakeMessage("aa1111aa"), state, session)
+    await edit_plate(FakeMessage("aa1111aa"), state, session, access_admin)
 
     updated = await repository.get_vehicle(session, "truck", truck.id)
     assert updated.license_plate == "AA1111AA"
@@ -317,4 +327,4 @@ async def test_ordinary_user_cannot_browse_vehicles(session, state, access):
 
     await on_company_vehicles(callback, state, access)
 
-    assert callback.answered == [ADMIN_ONLY]
+    assert callback.answered == [NO_RIGHTS]

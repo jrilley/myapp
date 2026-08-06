@@ -13,8 +13,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # прапорець можна перемкнути в рантаймі — і тести на заявки лишаються
 # робочими, поки код заявок живий.
 from app.bot import constants
+from app.bot.access import CREATE, DELETE, EDIT, READ
 from app.bot.constants import CATEGORIES
-from app.models import Application
+from app.models import (
+    CATEGORY_COMPANY,
+    CATEGORY_EMPLOYEES,
+    CATEGORY_TRIPS,
+    CATEGORY_VEHICLES,
+    Application,
+)
 
 CATEGORY_PREFIX = "cat"
 CONFIRM_YES = "confirm:yes"
@@ -40,6 +47,8 @@ MENU_VEHICLE_ADD = "menu:vehicle"
 #: Для адміністратора компанії — власна компанія мається на увазі.
 MENU_MY_VEHICLES = "menu:myveh"
 MENU_MY_EMPLOYEES = "menu:myemp"
+MENU_MY_COMPANY = "menu:mycompany"
+MENU_ROLES = "menu:roles"
 
 MENU_TRIP_NEW = "menu:tripnew"
 MENU_TRIPS = "menu:trips"
@@ -66,6 +75,8 @@ COMPANY_EMPLOYEES_PREFIX = "compemp"
 VEHICLE_LIST_PREFIX = "vlist"
 VEHICLE_CARD_PREFIX = "vcard"
 VEHICLE_EDIT_PREFIX = "vedit"
+VEHICLE_DELETE_PREFIX = "vdrop"
+VEHICLE_DELETE_CONFIRM = "vdropok"
 VEHICLE_TYPE_PREFIX = "veh:type"
 VEHICLE_COMPANY_PREFIX = "veh:company"
 VEHICLE_CONFIRM = "veh:confirm"
@@ -186,42 +197,51 @@ def phone2_keyboard() -> InlineKeyboardMarkup:
 COMPANY_ADD = "company:add"
 
 
-def main_menu_keyboard(
-    *, is_registered: bool = False, is_admin: bool = False, is_main_admin: bool = False
-) -> InlineKeyboardMarkup:
-    """Меню під конкретного користувача.
+def main_menu_keyboard(access) -> InlineKeyboardMarkup:
+    """Меню під конкретного користувача — рівно з його прав.
 
-    Незареєстрованому доступна лише реєстрація — заявки без неї не подати.
-    Приховування кнопки не є захистом: callback_data можна переслати або
-    підробити, тому кожен обмежений хендлер перевіряє права самостійно.
+    Кожна кнопка відповідає одному праву в матриці, тож меню й перевірки в
+    хендлерах не можуть розійтись: обидва питають той самий `access.can`.
+    Приховування кнопки при цьому не є захистом — callback_data можна
+    переслати або підробити, тому хендлер перевіряє право ще раз.
     """
     builder = InlineKeyboardBuilder()
 
-    if not is_registered:
+    if not access.is_registered:
         builder.button(text="🔑 Зареєструватися", callback_data=REG_START)
         builder.button(text="ℹ️ Довідка", callback_data=MENU_HELP)
         builder.adjust(1)
         return builder.as_markup()
 
-    builder.button(text="🚛 Новий рейс", callback_data=MENU_TRIP_NEW)
-    builder.button(text="🧾 Рейси", callback_data=MENU_TRIPS)
+    if access.can(CATEGORY_TRIPS, CREATE):
+        builder.button(text="🚛 Новий рейс", callback_data=MENU_TRIP_NEW)
+    if access.can(CATEGORY_TRIPS, READ):
+        builder.button(text="🧾 Рейси", callback_data=MENU_TRIPS)
+
     if constants.SHOW_APPLICATIONS:
         builder.button(text="📝 Нова заявка", callback_data=MENU_NEW)
         builder.button(text="📋 Мої заявки", callback_data=MENU_MY)
-    if is_admin:
-        if constants.SHOW_APPLICATIONS:
+        if access.is_main_admin:
             builder.button(text="🗂 Усі заявки", callback_data=MENU_ALL)
             builder.button(text="📊 Статистика", callback_data=MENU_STATS)
+
+    if access.can(CATEGORY_VEHICLES, CREATE):
         builder.button(text="🚛 Додати автомобіль", callback_data=MENU_VEHICLE_ADD)
-    if is_admin and not is_main_admin:
-        # Адміністратор компанії бачить лише свою компанію, тож заходить
-        # у транспорт і працівників напряму, без кроку вибору компанії.
-        builder.button(text="🚚 Транспорт", callback_data=MENU_MY_VEHICLES)
-        builder.button(text="👥 Працівники", callback_data=MENU_MY_EMPLOYEES)
-    if is_main_admin:
-        # Головний адмін заходить до транспорту й працівників через компанію.
+
+    # Головний адмін заходить у транспорт, працівників і компанію через
+    # список компаній: у нього їх багато. Решта — напряму у свою.
+    if not access.is_main_admin:
+        if access.can(CATEGORY_VEHICLES, READ):
+            builder.button(text="🚚 Транспорт", callback_data=MENU_MY_VEHICLES)
+        if access.can(CATEGORY_EMPLOYEES, READ):
+            builder.button(text="👥 Працівники", callback_data=MENU_MY_EMPLOYEES)
+        if access.can(CATEGORY_COMPANY, READ):
+            builder.button(text="🏢 Моя компанія", callback_data=MENU_MY_COMPANY)
+    else:
         builder.button(text="🏢 Компанії", callback_data=MENU_COMPANIES)
         builder.button(text="💼 Посади", callback_data=MENU_POSITIONS)
+        builder.button(text="🔑 Ролі й права", callback_data=MENU_ROLES)
+
     builder.button(text="ℹ️ Довідка", callback_data=MENU_HELP)
     builder.adjust(1)
     return builder.as_markup()
@@ -294,23 +314,39 @@ def employees_keyboard(
 
 
 def employee_card_keyboard(
-    employee_id: int, back: str = MENU_BACK
+    employee_id: int, back: str = MENU_BACK, *, access=None
 ) -> InlineKeyboardMarkup:
-    """Що саме редагуємо — вирішує кнопка; редактор один на поле."""
+    """Що саме редагуємо — вирішує кнопка; редактор один на поле.
+
+    Без права E показуємо саму лише картку. Компанія, посада й роль — навіть
+    за наявності E — лишаються головному адміну: це поля, якими роздають
+    доступ.
+    """
     builder = InlineKeyboardBuilder()
-    for field, title in (
-        ("name", "✏️ ПІБ"),
-        ("phone", "✏️ Телефон"),
-        ("phone2", "✏️ Дод. номер"),
-        ("company", "🏢 Компанія"),
-        ("position", "💼 Посада"),
-        ("role", "🔑 Роль"),
-    ):
-        builder.button(
-            text=title, callback_data=f"{EMP_EDIT_PREFIX}:{field}:{employee_id}"
-        )
+    rows = []
+    if access is not None and access.can(CATEGORY_EMPLOYEES, EDIT):
+        for field, title in (
+            ("name", "✏️ ПІБ"),
+            ("phone", "✏️ Телефон"),
+            ("phone2", "✏️ Дод. номер"),
+        ):
+            builder.button(
+                text=title, callback_data=f"{EMP_EDIT_PREFIX}:{field}:{employee_id}"
+            )
+        rows += [2, 1]
+        if access.is_main_admin:
+            for field, title in (
+                ("company", "🏢 Компанія"),
+                ("position", "💼 Посада"),
+                ("role", "🔑 Роль"),
+            ):
+                builder.button(
+                    text=title, callback_data=f"{EMP_EDIT_PREFIX}:{field}:{employee_id}"
+                )
+            rows += [2, 1]
     builder.button(text="⬅️ До списку", callback_data=back)
-    builder.adjust(2, 2, 2, 1)
+    rows.append(1)
+    builder.adjust(*rows)
     return builder.as_markup()
 
 
@@ -351,27 +387,48 @@ def companies_list_keyboard(
     return builder.as_markup()
 
 
-def company_card_keyboard(company_id: int) -> InlineKeyboardMarkup:
+def company_card_keyboard(company_id: int, access) -> InlineKeyboardMarkup:
+    """Склад кнопок — з прав. Той, хто має лише R, бачить картку без жодної
+    кнопки редагування: показувати те, що все одно відмовить, — гірше, ніж
+    не показувати."""
     builder = InlineKeyboardBuilder()
-    builder.button(
-        text="🚚 Транспорт",
-        callback_data=f"{COMPANY_VEHICLES_PREFIX}:{company_id}",
-    )
-    builder.button(
-        text="👥 Працівники",
-        callback_data=f"{COMPANY_EMPLOYEES_PREFIX}:{company_id}",
-    )
-    for field, title in (
-        ("name", "✏️ Назва"),
-        ("tax", "✏️ Код"),
-        ("address", "✏️ Адреса"),
-        ("chat", "💬 Робочий чат"),
-    ):
+    rows = []
+
+    shortcuts = 0
+    if access.can(CATEGORY_VEHICLES, READ):
         builder.button(
-            text=title, callback_data=f"{COMPANY_EDIT_PREFIX}:{field}:{company_id}"
+            text="🚚 Транспорт",
+            callback_data=f"{COMPANY_VEHICLES_PREFIX}:{company_id}",
         )
-    builder.button(text="⬅️ До компаній", callback_data=MENU_COMPANIES)
-    builder.adjust(2, 2, 2, 1)
+        shortcuts += 1
+    if access.can(CATEGORY_EMPLOYEES, READ):
+        builder.button(
+            text="👥 Працівники",
+            callback_data=f"{COMPANY_EMPLOYEES_PREFIX}:{company_id}",
+        )
+        shortcuts += 1
+    if shortcuts:
+        rows.append(shortcuts)
+
+    if access.can(CATEGORY_COMPANY, EDIT):
+        for field, title in (
+            ("name", "✏️ Назва"),
+            ("tax", "✏️ Код"),
+            ("address", "✏️ Адреса"),
+            ("chat", "💬 Робочий чат"),
+        ):
+            builder.button(
+                text=title, callback_data=f"{COMPANY_EDIT_PREFIX}:{field}:{company_id}"
+            )
+        rows += [2, 2]
+
+    if access.is_main_admin:
+        builder.button(text="⬅️ До компаній", callback_data=MENU_COMPANIES)
+    else:
+        builder.button(text="⬅️ Меню", callback_data=MENU_BACK)
+    rows.append(1)
+
+    builder.adjust(*rows)
     return builder.as_markup()
 
 
@@ -417,19 +474,43 @@ def vehicle_list_keyboard(
     return builder.as_markup()
 
 
-def vehicle_card_keyboard(kind: str, vehicle_id: int, back: str) -> InlineKeyboardMarkup:
+def vehicle_card_keyboard(
+    kind: str, vehicle_id: int, back: str, access
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for field, title in (
-        ("brand", "✏️ Марка"),
-        ("model", "✏️ Модель"),
-        ("plate", "✏️ Номер"),
-    ):
+    rows = []
+    if access.can(CATEGORY_VEHICLES, EDIT):
+        for field, title in (
+            ("brand", "✏️ Марка"),
+            ("model", "✏️ Модель"),
+            ("plate", "✏️ Номер"),
+        ):
+            builder.button(
+                text=title,
+                callback_data=f"{VEHICLE_EDIT_PREFIX}:{field}:{kind}:{vehicle_id}",
+            )
+        rows += [2, 1]
+    if access.can(CATEGORY_VEHICLES, DELETE):
         builder.button(
-            text=title,
-            callback_data=f"{VEHICLE_EDIT_PREFIX}:{field}:{kind}:{vehicle_id}",
+            text="🗑 Видалити",
+            callback_data=f"{VEHICLE_DELETE_PREFIX}:{kind}:{vehicle_id}",
         )
+        rows.append(1)
     builder.button(text="⬅️ До списку", callback_data=back)
-    builder.adjust(2, 1, 1)
+    rows.append(1)
+    builder.adjust(*rows)
+    return builder.as_markup()
+
+
+def vehicle_delete_confirm_keyboard(kind: str, vehicle_id: int, back: str):
+    """Видалення транспорту незворотне — рядок стирається. Тому питаємо."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🗑 Так, видалити",
+        callback_data=f"{VEHICLE_DELETE_CONFIRM}:{kind}:{vehicle_id}",
+    )
+    builder.button(text="⬅️ Ні, назад", callback_data=back)
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -639,18 +720,29 @@ def trips_keyboard(trips, *, offset: int = 0, total: int | None = None) -> Inlin
     return builder.as_markup()
 
 
-def trip_card_keyboard(trip_id: int, *, editable: bool = True) -> InlineKeyboardMarkup:
-    """`editable=False` — для водія: рейс йому видали, а не він його веде."""
+def trip_card_keyboard(
+    trip_id: int, *, editable: bool = True, deletable: bool = True
+) -> InlineKeyboardMarkup:
+    """Кнопки — з прав. Водій бачить саму лише картку: рейс йому видали, а не
+    він його веде; оператор і диспетчер правлять, але не видаляють."""
     builder = InlineKeyboardBuilder()
+    rows = []
+    top = 0
     if editable:
         builder.button(
             text="✏️ Редагувати", callback_data=f"{TRIP_EDIT_PREFIX}:{trip_id}"
         )
+        top += 1
+    if deletable:
         builder.button(
             text="🗑 Видалити", callback_data=f"{TRIP_DELETE_PREFIX}:{trip_id}"
         )
+        top += 1
+    if top:
+        rows.append(top)
     builder.button(text="⬅️ До рейсів", callback_data=MENU_TRIPS)
-    builder.adjust(2, 1) if editable else builder.adjust(1)
+    rows.append(1)
+    builder.adjust(*rows)
     return builder.as_markup()
 
 

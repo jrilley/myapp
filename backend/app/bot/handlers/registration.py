@@ -48,11 +48,7 @@ router = Router(name="registration")
 
 
 def _menu(access: Access):
-    return main_menu_keyboard(
-        is_registered=access.is_registered,
-        is_admin=access.is_admin,
-        is_main_admin=access.is_main_admin,
-    )
+    return main_menu_keyboard(access)
 
 
 # ---------------------------------------------------------------------------

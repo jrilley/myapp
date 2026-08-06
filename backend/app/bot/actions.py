@@ -5,11 +5,21 @@
 живе в одному місці, а не копіюється по хендлерах.
 """
 
+from html import escape
+
 from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.access import Access
+from app.bot.access import (
+    CATEGORY_TITLES,
+    CATEGORY_TRIPS,
+    ROLE_MAIN_ADMIN,
+    SCOPE_ALL,
+    SCOPE_COMPANY,
+    SCOPE_OWN,
+    Access,
+)
 from app.bot.formatting import (
     format_admin_application,
     format_own_application,
@@ -37,6 +47,13 @@ from app.models import ApplicationStatus
 
 Rendered = tuple[str, InlineKeyboardMarkup]
 
+#: Як підписати обсяг права в переліку ролей.
+SCOPE_NOTES = {
+    SCOPE_ALL: " (усі компанії)",
+    SCOPE_COMPANY: " (своя компанія)",
+    SCOPE_OWN: " (лише свої)",
+}
+
 
 async def delete_application(
     session: AsyncSession,
@@ -50,9 +67,9 @@ async def delete_application(
     if application is None:
         return False, f"Заявку #{application_id} не знайдено."
 
-    # Адмін може видалити будь-яку заявку, звичайний користувач — лише власну.
+    # Головний адмін може видалити будь-яку заявку, решта — лише власну.
     is_owner = application.telegram_user_id == access.telegram_user_id
-    if not (is_owner or access.is_admin):
+    if not (is_owner or access.is_main_admin):
         return False, "Ви можете видаляти лише власні заявки."
 
     chat_id = application.group_chat_id
@@ -183,6 +200,39 @@ async def render_positions(session: AsyncSession, *, offset: int = 0) -> Rendere
     )
 
 
+async def render_roles(session: AsyncSession) -> Rendered:
+    """Матриця прав як вона є в базі — щоб її можна було перевірити, не
+    відкриваючи міграцію."""
+    roles = await repository.list_roles(session)
+    lines = ["<b>Ролі й права</b>", ""]
+    for role in roles:
+        permissions = await repository.list_role_permissions(session, role.id)
+        lines.append(f"<b>{escape(role.role)}</b>")
+        if role.role == ROLE_MAIN_ADMIN:
+            lines.append("  усе, в усіх компаніях")
+        elif not permissions:
+            lines.append("  без доступу")
+        else:
+            for row in sorted(permissions, key=lambda r: r.category):
+                rights = "".join(
+                    letter
+                    for letter, on in (
+                        ("C", row.can_create),
+                        ("R", row.can_read),
+                        ("E", row.can_edit),
+                        ("D", row.can_delete),
+                    )
+                    if on
+                )
+                title = CATEGORY_TITLES.get(row.category, row.category)
+                note = SCOPE_NOTES.get(row.scope, "")
+                fields = f" · лише {escape(row.fields)}" if row.fields else ""
+                lines.append(f"  {title}: {rights}{note}{fields}")
+        lines.append("")
+    lines.append("<i>Права змінюються міграцією, не з бота.</i>")
+    return "\n".join(lines), back_to_menu_keyboard()
+
+
 async def render_companies(session: AsyncSession, *, offset: int = 0) -> Rendered:
     companies, total = await repository.page_companies(
         session, limit=PAGE_REFERENCE, offset=offset
@@ -212,14 +262,15 @@ async def render_trips(
     Фільтр обчислюється тут, бо `repository.list_trips` трактує None як
     «без обмеження» — передати туди невизначений id означало б показати все.
     """
-    if access.is_main_admin:
+    scope = access.scope(CATEGORY_TRIPS)
+    if access.is_main_admin or scope == SCOPE_ALL:
         trips, total = await repository.list_trips(
             session, limit=PAGE_TRIPS, offset=offset
         )
         title = "Усі рейси"
     elif access.employee is None:
         return NOT_REGISTERED, back_to_menu_keyboard()
-    elif access.is_admin:
+    elif scope == SCOPE_COMPANY:
         if access.employee.company_id is None:
             return "Не вдалося визначити вашу компанію.", back_to_menu_keyboard()
         trips, total = await repository.list_trips(

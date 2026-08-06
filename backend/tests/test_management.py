@@ -11,10 +11,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
 from app.bot.access import (
-    ADMIN_ONLY,
+    DENIED as NO_RIGHTS,
     ROLE_COMPANY_ADMIN,
     ROLE_MAIN_ADMIN,
-    ROLE_USER,
+    ROLE_DRIVER,
     Access,
 )
 from app.bot.handlers.management import (
@@ -47,6 +47,7 @@ from tests.conftest import (
     FakeMessage,
     FakeUser,
     callback_data,
+    permissions_for,
 )
 
 DENIED = "Дія доступна лише головному адміністратору."
@@ -70,7 +71,7 @@ async def org(session):
             position,
             Role(id=1, role=ROLE_MAIN_ADMIN),
             Role(id=2, role=ROLE_COMPANY_ADMIN),
-            Role(id=3, role=ROLE_USER),
+            Role(id=3, role=ROLE_DRIVER),
         ]
     )
     await session.commit()
@@ -111,7 +112,7 @@ async def test_ordinary_user_cannot_list_employees(session, state, access, emplo
 
     await on_company_employees(callback, state, session, access)
 
-    assert callback.answered == [ADMIN_ONLY]
+    assert callback.answered == [NO_RIGHTS]
     assert not callback.message.answers
 
 
@@ -122,7 +123,7 @@ async def test_ordinary_user_cannot_open_an_employee_card(
 
     await on_employee_card(callback, state, session, access)
 
-    assert callback.answered == [ADMIN_ONLY]
+    assert callback.answered == [NO_RIGHTS]
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +166,7 @@ async def test_card_shows_all_fields(session, state, access_admin, employee):
     assert "+380671112233" in text
     assert "ТОВ Ромашка" in text
     assert "Водій" in text
-    assert ROLE_USER in text
+    assert ROLE_DRIVER in text
     assert str(OWNER_ID) in text
 
 
@@ -295,7 +296,7 @@ async def test_position_change_leaves_the_role_alone(
 
     updated = await repository.get_employee(session, employee.id)
     assert updated.position.position == "Директор"
-    assert updated.role.role == ROLE_USER
+    assert updated.role.role == ROLE_DRIVER
 
 
 @pytest.mark.parametrize("field", ["position", "role", "company"])
@@ -310,7 +311,11 @@ async def test_company_admin_cannot_change_position_or_role(
         phone_number="+380000000000", position_id=1, role_id=2,
     )
     boss.role = Role(id=2, role=ROLE_COMPANY_ADMIN)
-    access = Access(telegram_user_id=ADMIN_ID, employee=boss)
+    access = Access(
+        telegram_user_id=ADMIN_ID,
+        employee=boss,
+        permissions=permissions_for(ROLE_COMPANY_ADMIN),
+    )
 
     callback = FakeCallback(
         f"{EMP_EDIT_PREFIX}:{field}:{employee.id}", user=FakeUser(ADMIN_ID)

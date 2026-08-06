@@ -4,10 +4,12 @@
 і контакти логіста не питаються: вони беруться з його запису в employees, тож
 підставити чужу компанію неможливо навіть підміною callback_data.
 
-Хто що бачить і чіпає, вирішує роль: головний адмін — усі рейси, адміністратор
-компанії — рейси своєї компанії, решта — власні й ті, де вони водії.
-Перевірка живе в `_may_view` / `_may_edit` і викликається в кожному
-хендлері: сховати кнопку — не захист.
+Хто що бачить і чіпає, вирішує матриця прав: право (CRED) плюс його обсяг
+(усі рейси / рейси компанії / власні). Обидві половини перевіряє `_may`, і
+викликається вона в кожному хендлері: сховати кнопку — не захист.
+
+Права бувають і на рівні поля: оператор має E на рейсах, але лише на масах,
+диспетчер — лише на статусі. Це перевіряє `access.may_edit_field`.
 """
 
 from datetime import date, datetime
@@ -19,8 +21,18 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import repository
-from app.bot.access import Access
+from app.bot.access import (
+    CATEGORY_TRIPS,
+    CREATE,
+    DELETE,
+    EDIT,
+    READ,
+    SCOPE_ALL,
+    SCOPE_COMPANY,
+    Access,
+)
 from app.bot.actions import render_trips
+from app.bot.guards import deny
 from app.bot.constants import (
     DATE_FORMAT,
     DATETIME_FORMAT,
@@ -111,37 +123,32 @@ PROMPTS = {
 # ---------------------------------------------------------------------------
 
 
-def _may_edit(access: Access, trip: Trip) -> bool:
-    """Хто може змінювати й видаляти рейс: головний адмін, адміністратор
-    компанії-замовника та той, хто рейс створив."""
+def _in_reach(access: Access, trip: Trip) -> bool:
+    """Чи дотягується цей рейс до людини за обсягом її права.
+
+    scope=all — будь-який; scope=company — рейси своєї компанії; scope=own —
+    лише ті, які людина створила або в яких вона водій.
+    """
     if access.is_main_admin:
         return True
     employee = access.employee
     if employee is None:
         return False
-    if (
-        access.is_admin
-        and employee.company_id is not None
-        and employee.company_id == trip.client_company_id
-    ):
+
+    scope = access.scope(CATEGORY_TRIPS)
+    if scope == SCOPE_ALL:
         return True
-    return employee.id is not None and employee.id == trip.created_by
+    if scope == SCOPE_COMPANY:
+        return (
+            employee.company_id is not None
+            and employee.company_id == trip.client_company_id
+        )
+    return employee.id is not None and employee.id in (trip.created_by, trip.driver_id)
 
 
-def _may_view(access: Access, trip: Trip) -> bool:
-    """Ті самі плюс водій рейсу.
-
-    Водій бачить, але не редагує: рейс — це завдання, яке йому видали, а не
-    його документ. Час заїзду й виїзду поки ставить логіст.
-    """
-    if _may_edit(access, trip):
-        return True
-    employee = access.employee
-    return (
-        employee is not None
-        and employee.id is not None
-        and employee.id == trip.driver_id
-    )
+def _may(access: Access, trip: Trip, right: str) -> bool:
+    """Право діє, тільки якщо рейс у межах обсягу цього права."""
+    return access.can(CATEGORY_TRIPS, right) and _in_reach(access, trip)
 
 
 async def _trip_or_denied(
@@ -150,14 +157,13 @@ async def _trip_or_denied(
     access: Access,
     trip_id: int,
     *,
-    for_edit: bool = True,
+    right: str = EDIT,
 ) -> Trip | None:
     trip = await repository.get_trip(session, trip_id)
     if trip is None:
         await callback.answer("Рейс не знайдено", show_alert=True)
         return None
-    allowed = _may_edit(access, trip) if for_edit else _may_view(access, trip)
-    if not allowed:
+    if not _may(access, trip, right):
         await callback.answer(DENIED, show_alert=True)
         return None
     return trip
@@ -178,6 +184,8 @@ def _actor_id(access: Access) -> int | None:
 async def on_new_trip(
     callback: CallbackQuery, state: FSMContext, access: Access
 ) -> None:
+    if await deny(callback, access, CATEGORY_TRIPS, CREATE):
+        return
     employee = access.employee
     if employee is None or employee.id is None or employee.company_id is None:
         await callback.answer()
@@ -619,18 +627,22 @@ async def on_trip_card(
         await callback.answer("Невідомий рейс", show_alert=True)
         return
 
-    trip = await _trip_or_denied(callback, session, access, int(raw_id), for_edit=False)
+    trip = await _trip_or_denied(callback, session, access, int(raw_id), right=READ)
     if trip is None:
         return
 
     await state.clear()
     await callback.answer()
     if callback.message is not None:
-        # Водієві кнопок редагування не показуємо: вони йому все одно
-        # відмовлять, а зайва кнопка виглядає як помилка системи.
+        # Кнопок, які все одно відмовлять, не показуємо: зайва кнопка
+        # виглядає як помилка системи.
         await callback.message.answer(
             format_trip(trip),
-            reply_markup=trip_card_keyboard(trip.id, editable=_may_edit(access, trip)),
+            reply_markup=trip_card_keyboard(
+                trip.id,
+                editable=_may(access, trip, EDIT),
+                deletable=_may(access, trip, DELETE),
+            ),
         )
 
 
@@ -656,7 +668,16 @@ async def on_trip_edit(
     await state.clear()
     await callback.answer()
     if callback.message is not None:
-        fields = [(key, title) for key, (_, title, _) in TRIP_FIELDS.items()]
+        # Показуємо лише те, що ця роль справді може змінити: оператору —
+        # маси, диспетчеру — статус.
+        fields = [
+            (key, title)
+            for key, (_, title, _) in TRIP_FIELDS.items()
+            if access.may_edit_field(CATEGORY_TRIPS, key)
+        ]
+        if not fields:
+            await callback.message.answer(DENIED)
+            return
         await callback.message.answer(
             f"Рейс #{trip.id}. Що змінюємо?",
             reply_markup=trip_fields_keyboard(trip.id, fields),
@@ -674,6 +695,10 @@ async def on_trip_field(
     key = parts[2]
     if key not in TRIP_FIELDS:
         await callback.answer("Невідоме поле", show_alert=True)
+        return
+    # Право E ще не означає, що можна чіпати саме це поле.
+    if not access.may_edit_field(CATEGORY_TRIPS, key):
+        await callback.answer(DENIED, show_alert=True)
         return
 
     trip = await _trip_or_denied(callback, session, access, int(parts[3]))
@@ -787,7 +812,7 @@ async def _editable_trip(
         await state.clear()
         await message.answer("Рейс не знайдено.")
         return None
-    if not _may_edit(access, trip):
+    if not _may(access, trip, EDIT):
         await state.clear()
         await message.answer(DENIED)
         return None
@@ -803,7 +828,12 @@ async def edit_value(
         return
 
     data = await state.get_data()
-    field = TRIP_FIELDS.get(data.get("field", ""))
+    key = data.get("field", "")
+    if not access.may_edit_field(CATEGORY_TRIPS, key):
+        await state.clear()
+        await message.answer(DENIED)
+        return
+    field = TRIP_FIELDS.get(key)
     if field is None:
         # Стан розійшовся з даними — почати спочатку зрозуміліше, ніж
         # мовчки зберегти значення не в те поле.
@@ -826,6 +856,9 @@ async def edit_arrival_date(
     if value is None:
         await callback.answer("Невідома дата", show_alert=True)
         return
+    if not access.may_edit_field(CATEGORY_TRIPS, "date"):
+        await callback.answer(DENIED, show_alert=True)
+        return
     await callback.answer()
     if callback.message is None:
         return
@@ -847,6 +880,9 @@ async def edit_exporter(
     )
     if company is None:
         await callback.answer("Невідома компанія", show_alert=True)
+        return
+    if not access.may_edit_field(CATEGORY_TRIPS, "exp"):
+        await callback.answer(DENIED, show_alert=True)
         return
     await callback.answer()
     if callback.message is None:
@@ -876,7 +912,7 @@ async def on_trip_delete(
         await callback.answer("Невідомий рейс", show_alert=True)
         return
 
-    trip = await _trip_or_denied(callback, session, access, int(raw_id))
+    trip = await _trip_or_denied(callback, session, access, int(raw_id), right=DELETE)
     if trip is None:
         return
 
