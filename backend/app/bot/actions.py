@@ -195,7 +195,12 @@ async def render_positions(session: AsyncSession, *, offset: int = 0) -> Rendere
 
     header = f"<b>Посади</b> — {_range_note(offset, len(positions), total)}"
     return (
-        f"{header}\nПосада визначає роль доступу. Оберіть, щоб змінити:",
+        # Посада каже, ким людина працює; що їй дозволено — окреме питання,
+        # і відповідає на нього роль. Зв'язок між ними прибрано навмисно:
+        # підвищення прав має лишатись свідомою дією, а не наслідком того,
+        # що комусь поміняли підпис у довіднику.
+        f"{header}\nПосада — це підпис, а не права: їх дає роль. "
+        f"Оберіть, щоб змінити:",
         positions_keyboard(positions, offset=offset, total=total),
     )
 

@@ -9,6 +9,7 @@ from aiogram.types import BotCommand
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot import constants
+from app.bot import errors
 from app.bot.handlers import build_router
 from app.bot.middlewares import AccessMiddleware, DbSessionMiddleware
 from app.bot.publisher import Publisher
@@ -62,5 +63,7 @@ def create_dispatcher(
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
     dispatcher.update.middleware(AccessMiddleware(settings))
     dispatcher.include_router(build_router())
+    # Останнім: він ловить те, що не спіймали хендлери вище.
+    dispatcher.include_router(errors.router)
     dispatcher.startup.register(setup_bot_commands)
     return dispatcher

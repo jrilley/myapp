@@ -545,7 +545,7 @@ async def list_trips(
 
 
 async def update_trip(
-    session: AsyncSession, trip: Trip, *, editor_id: int, **fields
+    session: AsyncSession, trip: Trip, *, editor_id: int | None, **fields
 ) -> Trip:
     """Оновлює поля рейсу й одразу проставляє, хто і коли це зробив.
 
@@ -585,7 +585,9 @@ async def set_trip_chat_message(
     return trip
 
 
-async def soft_delete_trip(session: AsyncSession, trip: Trip, *, deleted_by: int) -> Trip:
+async def soft_delete_trip(
+    session: AsyncSession, trip: Trip, *, deleted_by: int | None
+) -> Trip:
     # Так само без refresh — див. set_trip_chat_message.
     trip.deleted_by = deleted_by
     trip.deleted_at = _utc_now()
