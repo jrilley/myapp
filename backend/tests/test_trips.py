@@ -20,6 +20,7 @@ from app.bot.access import (
     ROLE_DRIVER,
     ROLE_LOGIST,
     ROLE_MAIN_ADMIN,
+    ROLE_OPERATOR,
     Access,
 )
 from app.bot.actions import render_trips
@@ -31,6 +32,7 @@ from app.bot.handlers.trips import (
     on_new_trip,
     on_trip_card,
     on_trip_delete,
+    on_trip_edit,
     on_trip_field,
     edit_exporter,
     edit_value,
@@ -104,6 +106,7 @@ async def world(session):
             Role(id=2, role=ROLE_COMPANY_ADMIN),
             Role(id=3, role=ROLE_DRIVER),
             Role(id=4, role=ROLE_LOGIST),
+            Role(id=5, role=ROLE_OPERATOR),
             Position(id=1, position="Диспетчер"),
             Position(id=2, position="Логіст"),
         ]
@@ -856,3 +859,85 @@ async def test_foreign_trip_cannot_be_deleted(session, logist, trips, publisher)
 
     assert callback.answered == [DENIED]
     assert await repository.get_trip(session, trips.foreign.id) is not None
+
+
+# ---------------------------------------------------------------------------
+# Права на рівні поля
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def operator(session, world) -> Access:
+    employee = await repository.create_employee(
+        session, tg_id=6006, company_id=world.ours.id, fullname="Ольга Ваги",
+        phone_number="+380506660000", position_id=1, role_id=5,
+    )
+    return Access(
+        telegram_user_id=6006,
+        employee=await repository.get_employee_by_tg_id(session, 6006),
+        permissions=permissions_for(ROLE_OPERATOR),
+    )
+
+
+async def test_operator_menu_offers_only_masses(session, state, operator, trips):
+    """У меню редагування — лише те, що ця роль справді може змінити."""
+    callback = FakeCallback(f"{TRIP_EDIT_PREFIX}:{trips.mine.id}", user=FakeUser(6006))
+
+    await on_trip_edit(callback, state, session, operator)
+
+    data = callback_data(callback.message.markups[0])
+    assert f"{TRIP_FIELD_PREFIX}:bmass:{trips.mine.id}" in data
+    assert f"{TRIP_FIELD_PREFIX}:status:{trips.mine.id}" not in data
+    assert f"{TRIP_FIELD_PREFIX}:ttn:{trips.mine.id}" not in data
+
+
+async def test_operator_cannot_open_a_field_outside_their_right(
+    session, state, operator, trips
+):
+    """Кнопки немає, але callback_data можна підробити."""
+    callback = FakeCallback(
+        f"{TRIP_FIELD_PREFIX}:ttn:{trips.mine.id}", user=FakeUser(6006)
+    )
+
+    await on_trip_field(callback, state, session, operator)
+
+    assert callback.answered == [DENIED]
+    assert await state.get_state() is None
+
+
+async def test_operator_saves_a_mass(session, state, operator, trips):
+    callback = FakeCallback(
+        f"{TRIP_FIELD_PREFIX}:bmass:{trips.mine.id}", user=FakeUser(6006)
+    )
+    await on_trip_field(callback, state, session, operator)
+
+    await edit_value(FakeMessage("28500"), state, session, operator)
+
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.b_mass == 28500
+
+
+async def test_operator_cannot_save_a_forbidden_field_by_state(
+    session, state, operator, trips
+):
+    """Стан можна лишити з попереднього кроку — право перевіряється і тут."""
+    await state.set_state(TripEdit.value)
+    await state.update_data(trip_id=trips.mine.id, field="ttn")
+    message = FakeMessage("ПІДРОБКА")
+
+    await edit_value(message, state, session, operator)
+
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.ttn_num != "ПІДРОБКА"
+    assert message.answers[0] == DENIED
+
+
+async def test_operator_cannot_delete_a_trip(session, operator, trips, publisher):
+    callback = FakeCallback(
+        f"{TRIP_DELETE_PREFIX}:{trips.mine.id}", user=FakeUser(6006)
+    )
+
+    await on_trip_delete(callback, session, publisher, operator)
+
+    assert callback.answered == [DENIED]
+    assert await repository.get_trip(session, trips.mine.id) is not None

@@ -11,9 +11,17 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app import repository
-from app.bot.access import DENIED as NO_RIGHTS, ROLE_COMPANY_ADMIN, Access
+from app.bot.access import (
+    DENIED as NO_RIGHTS,
+    ROLE_COMPANY_ADMIN,
+    ROLE_LOGIST,
+    ROLE_MANAGER,
+    Access,
+)
 from app.bot.handlers.vehicles import (
     on_add_vehicle,
+    on_vehicle_delete,
+    on_vehicle_delete_confirm,
     step_brand,
     step_company,
     step_confirm,
@@ -23,6 +31,8 @@ from app.bot.handlers.vehicles import (
 )
 from app.bot.keyboards import (
     MENU_VEHICLE_ADD,
+    VEHICLE_DELETE_CONFIRM,
+    VEHICLE_DELETE_PREFIX,
     VEHICLE_COMPANY_PREFIX,
     VEHICLE_CONFIRM,
     VEHICLE_TYPE_PREFIX,
@@ -36,6 +46,7 @@ from tests.conftest import (
     FakeMessage,
     FakeUser,
     callback_data,
+    make_access,
     permissions_for,
 )
 
@@ -307,3 +318,74 @@ async def test_ordinary_user_cannot_add_a_vehicle(session, state, access):
 
     assert await state.get_state() is None
     assert callback.answered == [NO_RIGHTS]
+
+
+# ---------------------------------------------------------------------------
+# Видалення
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_asks_before_erasing(session, state, access_admin, companies):
+    """Рядок транспорту стирається назовсім, тож питаємо."""
+    first, _ = companies
+    truck = await repository.create_vehicle(
+        session, "truck", brand="Volvo", model="FH",
+        license_plate="AA1111AA", company_id=first.id,
+    )
+    callback = FakeCallback(
+        f"{VEHICLE_DELETE_PREFIX}:truck:{truck.id}", user=FakeUser(ADMIN_ID)
+    )
+
+    await on_vehicle_delete(callback, session, access_admin)
+
+    assert "Видалити" in callback.message.answers[0]
+    # Поки не підтвердили — машина на місці.
+    assert await repository.get_vehicle(session, "truck", truck.id) is not None
+
+
+async def test_confirmed_delete_frees_the_plate(
+    session, state, access_admin, companies
+):
+    """М'яке видалення тут нічого не дало б: номер лишався б зайнятим."""
+    first, _ = companies
+    truck = await repository.create_vehicle(
+        session, "truck", brand="Volvo", model="FH",
+        license_plate="AA1111AA", company_id=first.id,
+    )
+    callback = FakeCallback(
+        f"{VEHICLE_DELETE_CONFIRM}:truck:{truck.id}", user=FakeUser(ADMIN_ID)
+    )
+
+    await on_vehicle_delete_confirm(callback, state, session, access_admin)
+
+    assert await repository.get_vehicle(session, "truck", truck.id) is None
+    assert await repository.get_vehicle_by_plate(session, "truck", "AA1111AA") is None
+
+
+async def test_logist_may_add_but_not_delete(session, state, companies):
+    """У логіста на транспорт C,R,E — і жодного D."""
+    first, _ = companies
+    truck = await repository.create_vehicle(
+        session, "truck", brand="Volvo", model="FH",
+        license_plate="AA1111AA", company_id=first.id,
+    )
+    access = make_access(OWNER_ID, role=ROLE_LOGIST, company_id=first.id)
+
+    callback = FakeCallback(
+        f"{VEHICLE_DELETE_PREFIX}:truck:{truck.id}", user=FakeUser(OWNER_ID)
+    )
+    await on_vehicle_delete(callback, session, access)
+
+    assert callback.answered == [NO_RIGHTS]
+    assert await repository.get_vehicle(session, "truck", truck.id) is not None
+
+
+async def test_manager_cannot_reach_vehicles_at_all(session, state, companies):
+    first, _ = companies
+    access = make_access(OWNER_ID, role=ROLE_MANAGER, company_id=first.id)
+    callback = FakeCallback(MENU_VEHICLE_ADD, user=FakeUser(OWNER_ID))
+
+    await on_add_vehicle(callback, state, access)
+
+    assert callback.answered == [NO_RIGHTS]
+    assert await state.get_state() is None

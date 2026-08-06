@@ -282,7 +282,7 @@ async def edit_company_value(
 
     await state.clear()
     company = await repository.update_company(session, company, **{column: value})
-    await _show_company(message, company)
+    await _show_company(message, company, access)
 
 
 async def _company_value(session: AsyncSession, field: str, raw: str, company):
@@ -432,7 +432,9 @@ async def on_employee_edit(
             await callback.message.answer(
                 "Не можна змінити власну роль — так можна втратити доступ.",
                 reply_markup=employee_card_keyboard(
-                    employee_id, f"{COMPANY_EMPLOYEES_PREFIX}:{employee.company_id}"
+                    employee_id,
+                    f"{COMPANY_EMPLOYEES_PREFIX}:{employee.company_id}",
+                    access=access,
                 ),
             )
             return

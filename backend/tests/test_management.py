@@ -13,8 +13,10 @@ from app import repository
 from app.bot.access import (
     DENIED as NO_RIGHTS,
     ROLE_COMPANY_ADMIN,
-    ROLE_MAIN_ADMIN,
+    MAIN_ADMIN_ONLY,
     ROLE_DRIVER,
+    ROLE_MAIN_ADMIN,
+    ROLE_MANAGER,
     Access,
 )
 from app.bot.handlers.management import (
@@ -24,21 +26,28 @@ from app.bot.handlers.management import (
     on_employee_card,
     on_employee_edit,
     on_employee_set,
+    on_company_edit,
     on_company_employees,
+    on_my_company,
     on_position_add,
+    on_roles,
     on_positions,
+    edit_company_value,
     position_name,
 )
 from app.bot.keyboards import (
     EMP_EDIT_PREFIX,
     EMP_SET_PREFIX,
     EMP_VIEW_PREFIX,
+    COMPANY_EDIT_PREFIX,
     COMPANY_EMPLOYEES_PREFIX,
+    MENU_MY_COMPANY,
     MENU_POSITIONS,
+    MENU_ROLES,
     POSITION_ADD,
     POSITION_CARD_PREFIX,
 )
-from app.bot.states import EmployeeEdit, PositionForm
+from app.bot.states import CompanyEdit, EmployeeEdit, PositionForm
 from app.models import Company, Employee, Position, Role
 from tests.conftest import (
     ADMIN_ID,
@@ -47,6 +56,7 @@ from tests.conftest import (
     FakeMessage,
     FakeUser,
     callback_data,
+    make_access,
     permissions_for,
 )
 
@@ -374,3 +384,135 @@ async def test_only_main_admin_adds_a_position(state, access):
 
     assert await state.get_state() is None
     assert callback.answered == [DENIED]
+
+
+# ---------------------------------------------------------------------------
+# Картка компанії
+# ---------------------------------------------------------------------------
+
+
+async def test_editing_the_working_chat_redraws_the_card(
+    session, state, access_admin, org
+):
+    """Цей шлях не був покритий — і саме на ньому впав TypeError після того,
+    як картка компанії почала залежати від прав."""
+    company, _ = org
+    callback = FakeCallback(
+        f"{COMPANY_EDIT_PREFIX}:chat:{company.id}", user=FakeUser(ADMIN_ID)
+    )
+    await on_company_edit(callback, state, session, access_admin)
+    assert await state.get_state() == CompanyEdit.value
+
+    message = FakeMessage("-1001234567890")
+    await edit_company_value(message, state, session, access_admin)
+
+    refreshed = await repository.get_company(session, company.id)
+    assert refreshed.company_chat_id == -1001234567890
+    assert "-1001234567890" in message.answers[-1]
+    assert await state.get_state() is None
+
+
+async def test_working_chat_can_be_cleared(session, state, access_admin, org):
+    company, _ = org
+    await repository.update_company(session, company, company_chat_id=-100500)
+    await state.set_state(CompanyEdit.value)
+    await state.update_data(company_id=company.id, field="chat")
+
+    await edit_company_value(FakeMessage("-"), state, session, access_admin)
+
+    refreshed = await repository.get_company(session, company.id)
+    assert refreshed.company_chat_id is None
+
+
+async def test_garbage_chat_id_keeps_the_editor_open(
+    session, state, access_admin, org
+):
+    company, _ = org
+    await state.set_state(CompanyEdit.value)
+    await state.update_data(company_id=company.id, field="chat")
+    message = FakeMessage("моя група")
+
+    await edit_company_value(message, state, session, access_admin)
+
+    assert await state.get_state() == CompanyEdit.value
+    assert "Не схоже на id чату" in message.answers[0]
+
+
+async def test_taken_tax_id_is_refused(session, state, access_admin, org):
+    """Код унікальний; власний номер компанії конфліктом не рахуємо."""
+    company, _ = org
+    other = await repository.create_company(
+        session, name="ТОВ Друга", tax_id="99999999", address="Львів"
+    )
+    await state.set_state(CompanyEdit.value)
+    await state.update_data(company_id=company.id, field="tax")
+
+    message = FakeMessage(other.tax_id)
+    await edit_company_value(message, state, session, access_admin)
+    assert "уже є" in message.answers[0]
+
+    await edit_company_value(FakeMessage("55555555"), state, session, access_admin)
+    refreshed = await repository.get_company(session, company.id)
+    assert refreshed.tax_id == "55555555"
+
+
+async def test_my_company_opens_your_own(session, state, org, employee):
+    """Кнопка «Моя компанія» — без кроку вибору й без чужих компаній."""
+    company, _ = org
+    access = make_access(
+        OWNER_ID, role=ROLE_COMPANY_ADMIN, company_id=company.id
+    )
+    callback = FakeCallback(MENU_MY_COMPANY, user=FakeUser(OWNER_ID))
+
+    await on_my_company(callback, state, session, access)
+
+    assert "ТОВ Ромашка" in callback.message.answers[0]
+
+
+async def test_manager_sees_the_company_without_edit_buttons(
+    session, state, org, employee
+):
+    """У менеджера на компанію лише R: кнопок, які все одно відмовлять,
+    показувати не треба."""
+    company, _ = org
+    access = make_access(OWNER_ID, role=ROLE_MANAGER, company_id=company.id)
+    callback = FakeCallback(MENU_MY_COMPANY, user=FakeUser(OWNER_ID))
+
+    await on_my_company(callback, state, session, access)
+
+    data = callback_data(callback.message.markups[0])
+    assert not any(d.startswith(COMPANY_EDIT_PREFIX) for d in data)
+
+
+async def test_manager_cannot_edit_the_company_even_by_id(
+    session, state, org, employee
+):
+    company, _ = org
+    access = make_access(OWNER_ID, role=ROLE_MANAGER, company_id=company.id)
+    callback = FakeCallback(
+        f"{COMPANY_EDIT_PREFIX}:name:{company.id}", user=FakeUser(OWNER_ID)
+    )
+
+    await on_company_edit(callback, state, session, access)
+
+    assert callback.answered == [NO_RIGHTS]
+    assert await state.get_state() is None
+
+
+async def test_roles_screen_lists_the_matrix(session, state, access_admin, org):
+    callback = FakeCallback(MENU_ROLES, user=FakeUser(ADMIN_ID))
+
+    await on_roles(callback, state, session, access_admin)
+
+    text = callback.message.answers[0]
+    assert ROLE_MAIN_ADMIN in text
+    assert "усе, в усіх компаніях" in text
+
+
+async def test_roles_screen_is_main_admin_only(session, state, org, employee):
+    access = make_access(OWNER_ID, role=ROLE_COMPANY_ADMIN)
+    callback = FakeCallback(MENU_ROLES, user=FakeUser(OWNER_ID))
+
+    await on_roles(callback, state, session, access)
+
+    assert callback.answered == [MAIN_ADMIN_ONLY]

@@ -794,7 +794,12 @@ async def _apply(
         session, trip, editor_id=_actor_id(access), **fields
     )
     await message.answer(
-        format_trip(updated), reply_markup=trip_card_keyboard(updated.id)
+        format_trip(updated),
+        reply_markup=trip_card_keyboard(
+            updated.id,
+            editable=_may(access, updated, EDIT),
+            deletable=_may(access, updated, DELETE),
+        ),
     )
 
 
