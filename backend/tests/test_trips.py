@@ -28,6 +28,11 @@ from app.bot.handlers.common import on_page
 from app.bot.access import DENIED as NO_RIGHTS
 from app.bot.handlers.trips import (
     DENIED,
+    edit_driver_manual,
+    edit_driver_name,
+    edit_driver_phone,
+    edit_driver_pick,
+    edit_status,
     on_calendar_nav,
     on_new_trip,
     on_trip_card,
@@ -70,9 +75,10 @@ from app.bot.keyboards import (
     TRIP_EXPORTER_PREFIX,
     TRIP_FIELD_PREFIX,
     TRIP_SHOW_PREFIX,
+    TRIP_STATUS_PREFIX,
 )
 from app.bot.states import TripEdit, TripForm
-from app.models import TRIP_STATUS_NEW, Company, Position, Role
+from app.models import TRIP_STATUS_NEW, TRIP_STATUSES, Company, Position, Role
 from tests.conftest import (
     ADMIN_ID,
     OWNER_ID,
@@ -756,10 +762,10 @@ async def _start_edit(session, state, access, trip_id: int, field: str):
     return callback
 
 
-async def test_editing_records_who_and_when(session, state, boss, trips):
+async def test_editing_records_who_and_when(session, state, boss, trips, publisher):
     await _start_edit(session, state, boss, trips.mine.id, "grain")
 
-    await edit_value(FakeMessage("Кукурудза"), state, session, boss)
+    await edit_value(FakeMessage("Кукурудза"), state, session, boss, publisher)
 
     trip = await repository.get_trip(session, trips.mine.id)
     assert trip.grain_type == "Кукурудза"
@@ -768,52 +774,56 @@ async def test_editing_records_who_and_when(session, state, boss, trips):
     assert await state.get_state() is None
 
 
-async def test_editing_a_plate_rejects_the_other_one(session, state, logist, trips):
+async def test_editing_a_plate_rejects_the_other_one(
+    session, state, logist, trips, publisher
+):
     await _start_edit(session, state, logist, trips.mine.id, "rplate")
     message = FakeMessage("AA1111AA")  # номер тягача цього ж рейсу
 
-    await edit_value(message, state, session, logist)
+    await edit_value(message, state, session, logist, publisher)
 
     assert "не можуть збігатися" in message.answers[0]
     assert await state.get_state() == TripEdit.value
 
 
-async def test_mass_takes_only_whole_numbers(session, state, logist, trips):
+async def test_mass_takes_only_whole_numbers(session, state, logist, trips, publisher):
     await _start_edit(session, state, logist, trips.mine.id, "bmass")
 
     bad = FakeMessage("28,5 тонни")
-    await edit_value(bad, state, session, logist)
+    await edit_value(bad, state, session, logist, publisher)
     assert "Ціле число" in bad.answers[0]
 
-    await edit_value(FakeMessage("28500"), state, session, logist)
+    await edit_value(FakeMessage("28500"), state, session, logist, publisher)
     trip = await repository.get_trip(session, trips.mine.id)
     assert trip.b_mass == 28500
 
 
 async def test_entry_time_is_validated_and_can_be_cleared(
-    session, state, logist, trips
+    session, state, logist, trips, publisher
 ):
     await _start_edit(session, state, logist, trips.mine.id, "entry")
     bad = FakeMessage("10.08.2026 07:30")
-    await edit_value(bad, state, session, logist)
+    await edit_value(bad, state, session, logist, publisher)
     assert "РРРР-ММ-ДД" in bad.answers[0]
 
-    await edit_value(FakeMessage("2026-08-10 07:30"), state, session, logist)
+    await edit_value(FakeMessage("2026-08-10 07:30"), state, session, logist, publisher)
     trip = await repository.get_trip(session, trips.mine.id)
     assert trip.datetime_entry == "2026-08-10 07:30"
 
     await _start_edit(session, state, logist, trips.mine.id, "entry")
-    await edit_value(FakeMessage("-"), state, session, logist)
+    await edit_value(FakeMessage("-"), state, session, logist, publisher)
     trip = await repository.get_trip(session, trips.mine.id)
     assert trip.datetime_entry is None
 
 
-async def test_changing_exporter_refreshes_the_card(session, state, world, logist, trips):
+async def test_changing_exporter_refreshes_the_card(
+    session, state, world, logist, trips, publisher
+):
     await _start_edit(session, state, logist, trips.mine.id, "exp")
     assert await state.get_state() == TripEdit.exporter
 
     callback = FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.ours.id}")
-    await edit_exporter(callback, state, session, logist)
+    await edit_exporter(callback, state, session, logist, publisher)
 
     trip = await repository.get_trip(session, trips.mine.id)
     assert trip.exporter_company_id == world.ours.id
@@ -922,27 +932,27 @@ async def test_operator_cannot_open_a_field_outside_their_right(
     assert await state.get_state() is None
 
 
-async def test_operator_saves_a_mass(session, state, operator, trips):
+async def test_operator_saves_a_mass(session, state, operator, trips, publisher):
     callback = FakeCallback(
         f"{TRIP_FIELD_PREFIX}:bmass:{trips.mine.id}", user=FakeUser(6006)
     )
     await on_trip_field(callback, state, session, operator)
 
-    await edit_value(FakeMessage("28500"), state, session, operator)
+    await edit_value(FakeMessage("28500"), state, session, operator, publisher)
 
     trip = await repository.get_trip(session, trips.mine.id)
     assert trip.b_mass == 28500
 
 
 async def test_operator_cannot_save_a_forbidden_field_by_state(
-    session, state, operator, trips
+    session, state, operator, trips, publisher
 ):
     """Стан можна лишити з попереднього кроку — право перевіряється і тут."""
     await state.set_state(TripEdit.value)
     await state.update_data(trip_id=trips.mine.id, field="ttn")
     message = FakeMessage("ПІДРОБКА")
 
-    await edit_value(message, state, session, operator)
+    await edit_value(message, state, session, operator, publisher)
 
     trip = await repository.get_trip(session, trips.mine.id)
     assert trip.ttn_num != "ПІДРОБКА"
@@ -1075,3 +1085,183 @@ async def test_card_says_manager_not_logist(session, state, chief, trips):
     text = callback.message.answers[0]
     assert "<b>Менеджер:</b>" in text
     assert "Логіст:" not in text
+
+
+# ---------------------------------------------------------------------------
+# Статус, робочий чат і зміна водія
+# ---------------------------------------------------------------------------
+
+
+async def test_status_is_picked_from_the_list(session, state, logist, trips, publisher):
+    """Статус більше не набирається текстом: у callback_data йде номер."""
+    await _start_edit(session, state, logist, trips.mine.id, "status")
+    assert await state.get_state() == TripEdit.status
+
+    index = TRIP_STATUSES.index("В дорозі")
+    await edit_status(
+        FakeCallback(f"{TRIP_STATUS_PREFIX}:{index}"), state, session, logist, publisher
+    )
+
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.status == "В дорозі"
+
+
+async def test_status_outside_the_list_is_refused(
+    session, state, logist, trips, publisher
+):
+    """Номер за межами переліку — саме те, що приходить із підробленої
+    callback_data. Раніше на цьому місці зберігався б довільний рядок."""
+    await _start_edit(session, state, logist, trips.mine.id, "status")
+    callback = FakeCallback(f"{TRIP_STATUS_PREFIX}:{len(TRIP_STATUSES)}")
+
+    await edit_status(callback, state, session, logist, publisher)
+
+    assert callback.answered == ["Невідомий статус"]
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.status == TRIP_STATUS_NEW
+
+
+async def test_status_typed_as_text_no_longer_saves(
+    session, state, logist, trips, publisher
+):
+    """Стан міг лишитись від старої версії бота — текст у нього не пройде."""
+    await state.set_state(TripEdit.value)
+    await state.update_data(trip_id=trips.mine.id, field="status")
+    message = FakeMessage("готово")
+
+    await edit_value(message, state, session, logist, publisher)
+
+    trip = await repository.get_trip(session, trips.mine.id)
+    assert trip.status == TRIP_STATUS_NEW
+
+
+async def test_editing_refreshes_the_working_chat(
+    session, state, logist, world, publisher
+):
+    """Головне: у чаті має висіти теперішній рейс, а не його перша версія."""
+    trip = await make_trip(
+        session, world.logist, world.ours,
+        chat_id=OUR_CHAT_ID, chat_message_id=777,
+    )
+    await _start_edit(session, state, logist, trip.id, "grain")
+
+    await edit_value(FakeMessage("Кукурудза"), state, session, logist, publisher)
+
+    assert len(publisher.edited) == 1
+    chat_id, message_id, text = publisher.edited[0]
+    assert (chat_id, message_id) == (OUR_CHAT_ID, 777)
+    assert "Кукурудза" in text
+
+
+async def test_trip_outside_a_chat_is_not_refreshed(
+    session, state, logist, trips, publisher
+):
+    """Рейс могли створити до появи робочого чату — редагувати його можна."""
+    await _start_edit(session, state, logist, trips.mine.id, "grain")
+
+    await edit_value(FakeMessage("Ріпак"), state, session, logist, publisher)
+
+    assert publisher.edited == []
+
+
+async def test_driver_learns_about_a_new_status(
+    session, state, logist, world, publisher
+):
+    trip = await make_trip(session, world.logist, world.ours, driver_id=world.driver.id)
+    await _start_edit(session, state, logist, trip.id, "status")
+
+    index = TRIP_STATUSES.index("Завершено")
+    await edit_status(
+        FakeCallback(f"{TRIP_STATUS_PREFIX}:{index}"), state, session, logist, publisher
+    )
+
+    assert [chat for chat, _ in publisher.sent] == [DRIVER_ID]
+    assert "Завершено" in publisher.sent[0][1]
+
+
+async def test_driver_is_not_told_about_a_mass(
+    session, state, logist, world, publisher
+):
+    """Сповіщати про кожну правку маси — спам, після якого перестають
+    читати й важливе."""
+    trip = await make_trip(session, world.logist, world.ours, driver_id=world.driver.id)
+    await _start_edit(session, state, logist, trip.id, "bmass")
+
+    await edit_value(FakeMessage("28500"), state, session, logist, publisher)
+
+    assert publisher.sent == []
+
+
+async def test_reassigning_a_driver_moves_the_trip(
+    session, state, logist, world, publisher
+):
+    """Раніше мінявся лише підпис: driver_id лишався на попередній людині,
+    вона й далі бачила рейс, а новий водій не дізнавався нічого."""
+    trip = await make_trip(session, world.logist, world.ours, driver_id=world.driver.id)
+    await _start_edit(session, state, logist, trip.id, "driver")
+    assert await state.get_state() == TripEdit.driver
+
+    await edit_driver_pick(
+        FakeCallback(f"{TRIP_DRIVER_PREFIX}:{world.boss.id}"),
+        state, session, logist, publisher,
+    )
+
+    updated = await repository.get_trip(session, trip.id)
+    assert updated.driver_id == world.boss.id
+    assert updated.driver_fullname == "Олег Логіст"
+    assert updated.driver_phone_number == world.boss.phone_number
+
+    told = {chat: text for chat, text in publisher.sent}
+    assert "більше не за вами" in told[DRIVER_ID]
+    assert f"Рейс #{trip.id}" in told[ADMIN_ID]
+
+
+async def test_a_released_driver_loses_the_trip(session, state, logist, world, publisher):
+    """Обсяг «власні» рахується за driver_id — після передачі рейс зникає
+    зі списку колишнього водія."""
+    trip = await make_trip(session, world.logist, world.ours, driver_id=world.driver.id)
+    await _start_edit(session, state, logist, trip.id, "driver")
+    await edit_driver_pick(
+        FakeCallback(f"{TRIP_DRIVER_PREFIX}:{world.boss.id}"),
+        state, session, logist, publisher,
+    )
+
+    driver_access = await access_for(session, DRIVER_ID)
+    text, _ = await render_trips(session, driver_access)
+
+    assert "Рейсів поки немає" in text
+
+
+async def test_a_manual_driver_releases_the_employee(
+    session, state, logist, world, publisher
+):
+    """Найманий перевізник: зв'язок знімається, ПІБ і телефон лишаються."""
+    trip = await make_trip(session, world.logist, world.ours, driver_id=world.driver.id)
+    await _start_edit(session, state, logist, trip.id, "driver")
+
+    await edit_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state)
+    await edit_driver_name(FakeMessage("Сторонній Перевізник"), state, session, logist)
+    await edit_driver_phone(
+        FakeMessage("+380971112233"), state, session, logist, publisher
+    )
+
+    updated = await repository.get_trip(session, trip.id)
+    assert updated.driver_id is None
+    assert updated.driver_fullname == "Сторонній Перевізник"
+    assert updated.driver_phone_number == "+380971112233"
+    assert "більше не за вами" in dict(publisher.sent)[DRIVER_ID]
+
+
+async def test_a_driver_from_another_company_is_refused(
+    session, state, logist, world, publisher
+):
+    """id співробітника приходить у callback_data — компанію звіряємо заново."""
+    trip = await make_trip(session, world.logist, world.ours, driver_id=world.driver.id)
+    await _start_edit(session, state, logist, trip.id, "driver")
+
+    callback = FakeCallback(f"{TRIP_DRIVER_PREFIX}:{world.outsider.id}")
+    await edit_driver_pick(callback, state, session, logist, publisher)
+
+    updated = await repository.get_trip(session, trip.id)
+    assert updated.driver_id == world.driver.id
+    assert "Невідомий співробітник" in callback.message.answers[-1]

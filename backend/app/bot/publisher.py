@@ -4,6 +4,7 @@ from typing import NamedTuple, Protocol
 from aiogram import Bot
 from aiogram.exceptions import (
     TelegramAPIError,
+    TelegramBadRequest,
     TelegramForbiddenError,
     TelegramMigrateToChat,
 )
@@ -42,6 +43,9 @@ class Publisher(Protocol):
         """Надіслати текст у довільний чат: робочий чат компанії або приватний
         чат водія. None — якщо не дійшло."""
 
+    async def edit(self, chat_id: int, message_id: int, text: str) -> bool:
+        """Перемалювати вже надіслане повідомлення. False — не вдалося."""
+
 
 class TelegramPublisher:
     def __init__(self, bot: Bot, chat_id: int | None) -> None:
@@ -79,6 +83,28 @@ class TelegramPublisher:
             logger.exception("Не вдалося надіслати повідомлення в чат %s", chat_id)
             return None
         return Sent(message.message_id, chat_id)
+
+    async def edit(self, chat_id: int, message_id: int, text: str) -> bool:
+        """Перемалювати повідомлення на місці — так рейс у робочому чаті
+        показує себе теперішнього, а не свою першу версію.
+
+        «message is not modified» помилкою не рахуємо: текст просто не
+        змінився, і для викликача це той самий успіх. Гілка має бути ПЕРЕД
+        TelegramAPIError: TelegramBadRequest — його підклас.
+        """
+        try:
+            await self._bot.edit_message_text(
+                text, chat_id=chat_id, message_id=message_id
+            )
+        except TelegramBadRequest as exc:
+            if "not modified" in str(exc):
+                return True
+            logger.warning("Не вдалося оновити повідомлення %s: %s", message_id, exc)
+            return False
+        except TelegramAPIError:
+            logger.exception("Не вдалося оновити повідомлення %s", message_id)
+            return False
+        return True
 
     async def publish(self, application: Application) -> tuple[int, int] | None:
         if self._chat_id is None:
@@ -129,3 +155,6 @@ class NullPublisher:
 
     async def send(self, chat_id: int, text: str) -> Sent | None:
         return None
+
+    async def edit(self, chat_id: int, message_id: int, text: str) -> bool:
+        return False

@@ -20,6 +20,7 @@ from app.models import (
     CATEGORY_EMPLOYEES,
     CATEGORY_TRIPS,
     CATEGORY_VEHICLES,
+    TRIP_STATUSES,
     Application,
 )
 
@@ -61,6 +62,8 @@ TRIP_EXPORTER_PREFIX = "trip:exp"
 #: Замовник: trip:cli:<id компанії> або trip:cli:manual.
 TRIP_CLIENT_PREFIX = "trip:cli"
 TRIP_CLIENT_MANUAL = "trip:cli:manual"
+#: Статус: trip:st:<номер у TRIP_STATUSES>.
+TRIP_STATUS_PREFIX = "trip:st"
 TRIP_CONFIRM = "trip:confirm"
 TRIP_SHOW_PREFIX = "trip:show"
 TRIP_EDIT_PREFIX = "trip:edit"
@@ -710,6 +713,23 @@ def trip_drivers_keyboard(employees) -> InlineKeyboardMarkup:
     builder.button(text="✍️ Ввести вручну", callback_data=TRIP_DRIVER_MANUAL)
     builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def trip_status_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Статуси з фіксованого переліку; поточний позначений.
+
+    У callback_data йде номер, а не назва: назви кирилицею, а Telegram
+    рахує callback_data в байтах — 64 на все, і кирилична літера коштує дві.
+    """
+    builder = InlineKeyboardBuilder()
+    for index, status in enumerate(TRIP_STATUSES):
+        mark = "✓ " if status == current else ""
+        builder.button(
+            text=f"{mark}{status}", callback_data=f"{TRIP_STATUS_PREFIX}:{index}"
+        )
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(2)
     return builder.as_markup()
 
 

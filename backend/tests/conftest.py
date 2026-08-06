@@ -171,6 +171,8 @@ class FakePublisher:
         self.published: list[int] = []
         self.retracted: list[tuple[int, int]] = []
         self.sent: list[tuple[int, str]] = []
+        #: Перемальовані повідомлення: (чат, id повідомлення, новий текст).
+        self.edited: list[tuple[int, int, str]] = []
         #: Куди «не вдалося» надіслати — так перевіряється, що збій розсилки
         #: не ламає дію користувача.
         self.unreachable: set[int] = set()
@@ -196,6 +198,12 @@ class FakePublisher:
             return None
         self.sent.append((chat_id, text))
         return Sent(self.message_id, chat_id)
+
+    async def edit(self, chat_id: int, message_id: int, text: str) -> bool:
+        if chat_id in self.unreachable:
+            return False
+        self.edited.append((chat_id, message_id, text))
+        return True
 
 
 @pytest.fixture
