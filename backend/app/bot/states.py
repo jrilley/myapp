@@ -115,14 +115,14 @@ class TripForm(StatesGroup):
     exporter = State()
     #: Тягач і причіп обирають із довідника vehicles…
     truck = State()
-    #: …або вводять руками, якщо машина чужа. Причіп у ручній гілці ще й
-    #: питає вид — у довіднику він береться із самого запису.
-    truck_manual = State()
-    truck_plate = State()
     trailer = State()
-    trailer_manual = State()
-    trailer_type = State()
-    trailer_plate = State()
+    #: …або заводять у довідник тут же: чужа машина теж має там бути, інакше
+    #: рейсу нема на що посилатись. Стани спільні для тягача й причепа —
+    #: що саме заводимо, лежить у даних FSM.
+    v_type = State()
+    v_mark = State()
+    v_mark_name = State()
+    v_plate = State()
     grain = State()
     #: Водія обирають зі складу компанії…
     driver = State()
@@ -146,12 +146,14 @@ class TripEdit(StatesGroup):
     arrival_date = State()
     exporter = State()
     status = State()
-    #: Транспорт — вибір із довідника або ручний ввід, як і в анкеті.
+    #: Транспорт — вибір із довідника або заведення нової машини, як і в
+    #: анкеті. Стани спільні: що саме міняємо, лежить у даних FSM.
     truck = State()
     trailer = State()
-    vehicle_name = State()
-    vehicle_type = State()
-    vehicle_plate = State()
+    v_type = State()
+    v_mark = State()
+    v_mark_name = State()
+    v_plate = State()
     #: Водій — теж кнопка, але з двома гілками: вибір зі складу компанії…
     driver = State()
     #: …або ручний ввід стороннього перевізника, і тоді потрібні два кроки.

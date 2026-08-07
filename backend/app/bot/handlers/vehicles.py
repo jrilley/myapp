@@ -623,8 +623,11 @@ async def _apply_edit(
 async def on_vehicle_delete(
     callback: CallbackQuery, session: AsyncSession, access: Access
 ) -> None:
-    """Питаємо підтвердження: рядок транспорту стирається назовсім, на
-    відміну від рейсу, який лише позначається видаленим."""
+    """Питаємо підтвердження: машина зникне зі списків і з вибору в рейсі.
+
+    Сам рядок лишається — на нього посилаються перевезення, і стерти його
+    означало б лишити рейс без транспорту.
+    """
     vehicle_id = _one_id(callback.data)
     if vehicle_id is None:
         await callback.answer("Невідомий транспорт", show_alert=True)
@@ -635,14 +638,24 @@ async def on_vehicle_delete(
         return
 
     await callback.answer()
-    if callback.message is not None:
-        await callback.message.answer(
-            f"Видалити {escape(vehicle.type_name.lower())} "
-            f"{escape(vehicle.make_model)} {escape(vehicle.license_plate)}?",
-            reply_markup=vehicle_delete_confirm_keyboard(
-                vehicle.id, f"{VEHICLE_CARD_PREFIX}:{vehicle.id}"
-            ),
-        )
+    if callback.message is None:
+        return
+
+    # Скільки перевезень на неї посилаються — щоб рішення ухвалювалось із
+    # відкритими очима: рядок лишиться, але зі списків машина зникне.
+    used = await repository.count_vehicle_trips(session, vehicle.id)
+    note = (
+        f"\n\nМашина є в {used} рейс(ах) — вони її й далі показуватимуть."
+        if used
+        else ""
+    )
+    await callback.message.answer(
+        f"Видалити {escape(vehicle.type_name.lower())} "
+        f"{escape(vehicle.make_model)} {escape(vehicle.license_plate)}?{note}",
+        reply_markup=vehicle_delete_confirm_keyboard(
+            vehicle.id, f"{VEHICLE_CARD_PREFIX}:{vehicle.id}"
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith(f"{VEHICLE_DELETE_CONFIRM}:"))
@@ -658,7 +671,6 @@ async def on_vehicle_delete_confirm(
     if vehicle is None:
         return
 
-    # Читаємо до видалення: після нього об'єкт лишається без рядка в базі.
     company_id = vehicle.owner_company_id
     kind = _kind_of(vehicle)
     label = f"{vehicle.make_model} {vehicle.license_plate}"

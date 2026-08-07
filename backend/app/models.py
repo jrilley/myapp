@@ -449,6 +449,15 @@ class Vehicle(Base):
         ),
     )
 
+    deleted_at: Mapped[str | None] = mapped_column(
+        Text,
+        doc=(
+            "Мітка м'якого видалення, ISO-8601 UTC; NULL = машина в роботі. "
+            "Рядок не стирається: на нього посилаються рейси, і стерти його "
+            "означало б лишити перевезення без транспорту."
+        ),
+    )
+
     type: Mapped["VehicleType"] = relationship(back_populates="vehicles")
     mark: Mapped["VehicleMark"] = relationship(back_populates="vehicles")
     owner_company: Mapped["Company | None"] = relationship(back_populates="vehicles")
@@ -473,6 +482,11 @@ class Vehicle(Base):
     @property
     def is_tractor(self) -> bool:
         return self.type.is_tractor
+
+    @property
+    def label(self) -> str:
+        """Як машину називають у списках і в рейсі."""
+        return f"{self.make_model} · {self.license_plate}"
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Vehicle id={self.id} plate={self.license_plate!r}>"
@@ -561,47 +575,23 @@ class Trip(Base):
     created_by: Mapped[int] = mapped_column(
         ForeignKey("employees.id"),
         nullable=False,
-        doc="Хто створив рейс. У самій заявці не показується.",
-    )
-    logist_fullname: Mapped[str] = mapped_column(
-        Text, nullable=False, doc="ПІБ логіста на момент створення (копія employees.fullname)."
-    )
-    logist_phone_number: Mapped[str] = mapped_column(
-        Text, nullable=False, doc="Телефон логіста на момент створення (копія employees.phone_number)."
-    )
-    logist_tg: Mapped[int] = mapped_column(
-        BigInteger,
-        nullable=False,
-        doc="Telegram id логіста (копія employees.tg_id) — щоб із заявки можна було написати.",
-    )
-
-    # Транспорт обирають із довідника `vehicles`, але не завжди: рейс може
-    # виконувати чужа машина, якої там немає. Тому FK необов'язкові, а марка
-    # з номером — обов'язкові: вони і є документом. Та сама пара
-    # «зв'язок + копія», що й у водія з менеджером.
-    truck_id: Mapped[int | None] = mapped_column(
-        ForeignKey("vehicles.id"),
-        doc="Тягач із довідника, якщо його обрали зі списку. Порожній — введений вручну.",
-    )
-    truck: Mapped[str] = mapped_column(Text, nullable=False, doc="Тягач: марка й модель.")
-    truck_license_plate: Mapped[str] = mapped_column(
-        Text, nullable=False, doc="Державний номер тягача."
-    )
-    trailer_id: Mapped[int | None] = mapped_column(
-        ForeignKey("vehicles.id"),
-        doc="Причіп із довідника, якщо його обрали зі списку.",
-    )
-    trailer: Mapped[str] = mapped_column(Text, nullable=False, doc="Причіп: марка й модель.")
-    trailer_type: Mapped[str] = mapped_column(
-        Text,
-        nullable=False,
         doc=(
-            "Вид причепа (зерновоз, самоскид тощо). При виборі з довідника "
-            "береться з vehicles.type — це властивість причепа, не рейсу."
+            "Хто створив рейс — він же менеджер у документі. ПІБ, телефон і "
+            "Telegram id читаються з employees через цей зв'язок, а не "
+            "дублюються трьома колонками."
         ),
     )
-    trailer_license_plate: Mapped[str] = mapped_column(
-        Text, nullable=False, doc="Державний номер причепа. Не може збігатися з номером тягача."
+
+    # Транспорт — тільки посилання. Марка, номер і вид причепа читаються з
+    # vehicles: тримати їх ще й копією означало б п'ять колонок, які кажуть
+    # те саме, що й рядок довідника, і розходяться з ним при першій правці.
+    # Чужа машина не виняток — вона теж заводиться в довідник, з порожнім
+    # власником.
+    truck_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicles.id"), nullable=False, doc="Тягач із довідника vehicles."
+    )
+    trailer_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicles.id"), nullable=False, doc="Причіп із довідника vehicles."
     )
 
     grain_type: Mapped[str] = mapped_column(Text, nullable=False, doc="Культура, яку везуть.")
@@ -694,8 +684,26 @@ class Trip(Base):
     exporter_company: Mapped["Company"] = relationship(foreign_keys=[exporter_company_id])
     creator: Mapped["Employee"] = relationship(foreign_keys=[created_by])
     driver: Mapped["Employee | None"] = relationship(foreign_keys=[driver_id])
-    truck_vehicle: Mapped["Vehicle | None"] = relationship(foreign_keys=[truck_id])
-    trailer_vehicle: Mapped["Vehicle | None"] = relationship(foreign_keys=[trailer_id])
+    truck: Mapped["Vehicle"] = relationship(foreign_keys=[truck_id])
+    trailer: Mapped["Vehicle"] = relationship(foreign_keys=[trailer_id])
+
+    # Те, що раніше лежало копіями. Читається зі зв'язків — рівно тому, що
+    # правда про машину чи менеджера має бути в одному місці.
+    @property
+    def manager_fullname(self) -> str:
+        return self.creator.fullname
+
+    @property
+    def manager_phone_number(self) -> str:
+        return self.creator.phone_number
+
+    @property
+    def manager_tg(self) -> int:
+        return self.creator.tg_id
+
+    @property
+    def trailer_type(self) -> str:
+        return self.trailer.type_name
 
     __table_args__ = (
         # Під основний запит списку: живі рейси, найближчі за датою прибуття.

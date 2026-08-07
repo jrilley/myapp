@@ -391,10 +391,11 @@ async def test_delete_asks_before_erasing(session, state, access_admin, companie
     assert await repository.get_vehicle(session, truck.id) is not None
 
 
-async def test_confirmed_delete_frees_the_plate(
+async def test_confirmed_delete_hides_but_keeps_the_row(
     session, state, access_admin, companies, vtypes, mark
 ):
-    """М'яке видалення тут нічого не дало б: номер лишався б зайнятим."""
+    """Машина зникає зі списків, але рядок лишається: на нього посилаються
+    рейси, і стерти його означало б лишити перевезення без транспорту."""
     first, _ = companies
     truck = await repository.create_vehicle(
         session, type_id=vtypes["Тягач"].id, mark_id=mark.id,
@@ -406,8 +407,13 @@ async def test_confirmed_delete_frees_the_plate(
 
     await on_vehicle_delete_confirm(callback, state, session, access_admin)
 
-    assert await repository.get_vehicle(session, truck.id) is None
-    assert await repository.get_vehicle_by_plate(session, "AA1111AA") is None
+    kept = await repository.get_vehicle(session, truck.id)
+    assert kept.deleted_at is not None
+    # Зі списку компанії зникла…
+    listed, _n = await repository.list_company_vehicles(session, "truck", first.id)
+    assert listed == []
+    # …а номер лишається зайнятим: він унікальний на весь довідник.
+    assert await repository.get_vehicle_by_plate(session, "AA1111AA") is not None
 
 
 async def test_logist_may_add_but_not_delete(session, state, companies, vtypes, mark):

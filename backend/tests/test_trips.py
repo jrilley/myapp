@@ -6,6 +6,7 @@
 своєї компанії, звичайний користувач — лише власні.
 """
 
+import itertools
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -34,11 +35,11 @@ from app.bot.handlers.trips import (
     edit_driver_phone,
     edit_choice,
     edit_datetime_button,
-    edit_vehicle_manual,
-    edit_vehicle_name,
+    edit_vehicle_mark_name,
+    edit_vehicle_type,
+    edit_vehicle_new,
     edit_vehicle_pick,
     edit_vehicle_plate,
-    edit_vehicle_type,
     edit_driver_pick,
     edit_status,
     on_calendar_nav,
@@ -64,16 +65,12 @@ from app.bot.handlers.trips import (
     step_exporter,
     step_grain,
     step_grain_pick,
-    step_trailer,
-    step_trailer_manual,
-    step_trailer_pick,
-    step_trailer_plate,
-    step_trailer_type,
-    step_trailer_type_pick,
-    step_truck,
-    step_truck_manual,
-    step_truck_pick,
-    step_truck_plate,
+    step_vehicle_mark_name,
+    step_vehicle_new,
+    step_vehicle_type,
+    step_vehicle_pick,
+    step_vehicle_plate,
+
     step_ttn,
 )
 from app.bot.keyboards import (
@@ -158,6 +155,9 @@ async def world(session):
         ]
     )
     await session.commit()
+    # Без довідника видів рейсу нема на що посилатись: транспорт тепер
+    # заводиться в vehicles навіть коли він чужий.
+    await seed_vehicle_types(session)
 
     async def employee(tg_id, company, name, phone, position_id, role_id):
         return await repository.create_employee(
@@ -212,6 +212,31 @@ async def outsider(session, world) -> Access:
     return await access_for(session, STRANGER_ID)
 
 
+#: Лічильник номерів для машин, які створює make_trip: номер унікальний на
+#: весь довідник, тож двом рейсам потрібні дві різні машини.
+_plate_seq = itertools.count(1)
+
+
+async def _some_vehicle(session, *, tractor: bool, company_id=None):
+    """Машина в довіднику — рейсу тепер є на що посилатись."""
+    type_name = "Тягач" if tractor else "Зерновоз"
+    vehicle_type = await repository.get_vehicle_type_by_name(session, type_name)
+    if vehicle_type is None:
+        vehicle_type = await repository.create_vehicle_type(
+            session, name=type_name, is_tractor=tractor
+        )
+    mark = await repository.get_vehicle_mark_by_name(session, "Volvo FH")
+    if mark is None:
+        mark = await repository.create_vehicle_mark(session, name="Volvo FH")
+    return await repository.create_vehicle(
+        session,
+        type_id=vehicle_type.id,
+        mark_id=mark.id,
+        license_plate=f"{'AA' if tractor else 'CC'}{next(_plate_seq):04d}XX",
+        owner_company_id=company_id,
+    )
+
+
 async def make_trip(session, creator, exporter, **overrides):
     payload = {
         "ttn_num": "ТТН-1",
@@ -221,20 +246,40 @@ async def make_trip(session, creator, exporter, **overrides):
         "client_company_name": exporter.name,
         "exporter_company_id": exporter.id,
         "created_by": creator.id,
-        "logist_fullname": creator.fullname,
-        "logist_phone_number": creator.phone_number,
-        "logist_tg": creator.tg_id,
-        "truck": "Volvo FH",
-        "truck_license_plate": "AA1111AA",
-        "trailer": "Schmitz SKO",
-        "trailer_type": "зерновоз",
-        "trailer_license_plate": "CC3333CC",
         "grain_type": "Пшениця",
         "driver_fullname": "Іван Водій",
         "driver_phone_number": "+380504445566",
     }
     payload.update(overrides)
+    if "truck_id" not in payload:
+        truck = await _some_vehicle(
+            session, tractor=True, company_id=creator.company_id
+        )
+        payload["truck_id"] = truck.id
+    if "trailer_id" not in payload:
+        trailer = await _some_vehicle(
+            session, tractor=False, company_id=creator.company_id
+        )
+        payload["trailer_id"] = trailer.id
     return await repository.create_trip(session, **payload)
+
+
+async def _new_vehicle(state, session, kind, make_model, plate, type_name="Зерновоз"):
+    """Чужа машина: заводиться в довідник просто з анкети.
+
+    Вид питається лише коли їх у довіднику більше одного — тягач там зазвичай
+    один, тож крок пропускається сам.
+    """
+    await step_vehicle_new(
+        FakeCallback(f"{TRIP_VEHICLE_MANUAL}:{kind}"), state, session
+    )
+    if await state.get_state() == TripForm.v_type:
+        vehicle_type = await repository.get_vehicle_type_by_name(session, type_name)
+        await step_vehicle_type(
+            FakeCallback(f"{TRIP_TTYPE_PREFIX}:{vehicle_type.id}"), state, session
+        )
+    await step_vehicle_mark_name(FakeMessage(make_model), state, session)
+    await step_vehicle_plate(FakeMessage(plate), state, session)
 
 
 async def fill_form_until_driver(state, session, access, exporter_id, *, grain="Пшениця"):
@@ -249,15 +294,8 @@ async def fill_form_until_driver(state, session, access, exporter_id, *, grain="
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
     )
-    await step_truck_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
-    await step_truck(FakeMessage("Volvo FH16"), state, session)
-    await step_truck_plate(FakeMessage("aa1111aa"), state, session)
-    await step_trailer_manual(
-        FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state, session
-    )
-    await step_trailer(FakeMessage("Schmitz SKO24"), state, session)
-    await step_trailer_type(FakeMessage("зерновоз"), state, session)
-    await step_trailer_plate(FakeMessage("cc3333cc"), state, session)
+    await _new_vehicle(state, session, "truck", "Volvo FH16", "aa1111aa")
+    await _new_vehicle(state, session, "trailer", "Schmitz SKO24", "cc3333cc")
     if grain is not None:
         await step_grain(FakeMessage(grain), state, session)
 
@@ -290,15 +328,12 @@ async def fill_form(state, session, access, **overrides):
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{exporter_id}"), state, session
     )
-    await step_truck_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
-    await step_truck(FakeMessage(steps["truck"]), state, session)
-    await step_truck_plate(FakeMessage(steps["truck_plate"]), state, session)
-    await step_trailer_manual(
-        FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state, session
+    await _new_vehicle(
+        state, session, "truck", steps["truck"], steps["truck_plate"]
     )
-    await step_trailer(FakeMessage(steps["trailer"]), state, session)
-    await step_trailer_type(FakeMessage(steps["trailer_type"]), state, session)
-    await step_trailer_plate(FakeMessage(steps["trailer_plate"]), state, session)
+    await _new_vehicle(
+        state, session, "trailer", steps["trailer"], steps["trailer_plate"]
+    )
     await step_grain(FakeMessage(steps["grain"]), state, session)
 
     driver_id = overrides.get("driver_id")
@@ -330,13 +365,13 @@ async def test_form_creates_a_trip_with_every_field(
     trip = trips[0]
     assert trip.ttn_num == "ТТН-000123"
     assert trip.arrival_date == "2026-08-10"
-    assert trip.truck == "Volvo FH16"
-    assert trip.trailer_type == "зерновоз"
+    assert trip.truck.make_model == "Volvo FH16"
+    assert trip.trailer_type == "Зерновоз"
     assert trip.grain_type == "Пшениця 2 клас"
     assert trip.driver_fullname == "Іван Іванович Іваненко"
     # Номери зводяться до верхнього регістру, щоб не було двох написань.
-    assert trip.truck_license_plate == "AA1111AA"
-    assert trip.trailer_license_plate == "CC3333CC"
+    assert trip.truck.license_plate == "AA1111AA"
+    assert trip.trailer.license_plate == "CC3333CC"
     assert await state.get_state() is None
 
 
@@ -355,9 +390,9 @@ async def test_owner_and_manager_come_from_the_creator(
     assert trip.client_company_id == world.theirs.id
     assert trip.exporter_company_id == world.theirs.id
     assert trip.created_by == world.logist.id
-    assert trip.logist_fullname == "Марія Логіст"
-    assert trip.logist_phone_number == "+380501112233"
-    assert trip.logist_tg == OWNER_ID
+    assert trip.manager_fullname == "Марія Логіст"
+    assert trip.manager_phone_number == "+380501112233"
+    assert trip.manager_tg == OWNER_ID
 
 
 async def test_new_trip_starts_empty_and_unaudited(
@@ -430,25 +465,17 @@ def test_callback_prefixes_do_not_shadow_each_other():
     assert not any(TRIP_CONFIRM.startswith(prefix) for prefix in prefixes)
 
 
-async def test_trailer_plate_must_differ_from_the_truck(session, state, world, logist):
-    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
-    await step_ttn(FakeMessage("ТТН-2"), state, session)
-    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
-    await step_client_pick(
-        FakeCallback(f"{TRIP_CLIENT_PREFIX}:{world.theirs.id}"), state, session
-    )
-    await step_exporter(
-        FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.theirs.id}"), state, session
-    )
-    await step_truck(FakeMessage("Volvo"), state, session)
-    await step_truck_plate(FakeMessage("AA1111AA"), state, session)
-    await step_trailer(FakeMessage("Schmitz"), state, session)
-    await step_trailer_type(FakeMessage("зерновоз"), state, session)
+async def test_trailer_plate_must_differ_from_the_truck(
+    session, state, world, logist
+):
+    """Той самий номер у тягача й причепа — це одна машина двічі."""
+    await fill_form_until_driver(state, session, logist, world.ours.id, grain=None)
+    await state.update_data(vehicle_kind="trailer")
+    await state.set_state(TripForm.v_plate)
+    message = FakeMessage("aa1111aa")  # номер тягача цього ж рейсу
 
-    message = FakeMessage("aa1111aa")  # той самий номер, іншим регістром
-    await step_trailer_plate(message, state, session)
+    await step_vehicle_plate(message, state, session)
 
-    assert await state.get_state() == TripForm.trailer_plate
     assert "не можуть збігатися" in message.answers[0]
 
 
@@ -821,16 +848,24 @@ async def test_editing_a_plate_rejects_the_other_one(
     session, state, logist, trips, publisher, vtypes
 ):
     """Номери тягача й причепа не можуть збігатися: це та сама машина."""
-    await _start_edit(session, state, logist, trips.mine.id, "trailer")
-    await edit_vehicle_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state)
-    await edit_vehicle_name(FakeMessage("Schmitz"), state, session, logist)
-    await edit_vehicle_type(FakeMessage("Зерновоз"), state, session)
+    trip = await repository.get_trip(session, trips.mine.id)
+    await _start_edit(session, state, logist, trip.id, "trailer")
+    await edit_vehicle_new(
+        FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state, session
+    )
+    if await state.get_state() == TripEdit.v_type:
+        zernovoz = await repository.get_vehicle_type_by_name(session, "Зерновоз")
+        await edit_vehicle_type(
+            FakeCallback(f"{TRIP_TTYPE_PREFIX}:{zernovoz.id}"), state, session
+        )
+    await edit_vehicle_mark_name(FakeMessage("Schmitz"), state, session)
 
-    message = FakeMessage("AA1111AA")  # номер тягача цього ж рейсу
+    # Номер тягача цього ж рейсу — це та сама машина.
+    message = FakeMessage(trip.truck.license_plate)
     await edit_vehicle_plate(message, state, session, logist, publisher)
 
-    assert "не можуть збігатися" in message.answers[0]
-    assert await state.get_state() == TripEdit.vehicle_plate
+    # Той самий номер — це та сама машина, і вона вже тягач цього рейсу.
+    assert "уже є в довіднику" in message.answers[0]
 
 
 async def test_mass_takes_only_whole_numbers(session, state, logist, trips, publisher):
@@ -1057,11 +1092,8 @@ async def test_client_can_be_typed_by_hand(
     await step_exporter(
         FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.theirs.id}"), state, session
     )
-    await step_truck(FakeMessage("Volvo"), state, session)
-    await step_truck_plate(FakeMessage("AA9999AA"), state, session)
-    await step_trailer(FakeMessage("Schmitz"), state, session)
-    await step_trailer_type(FakeMessage("зерновоз"), state, session)
-    await step_trailer_plate(FakeMessage("CC9999CC"), state, session)
+    await _new_vehicle(state, session, "truck", "Volvo", "AA9999AA")
+    await _new_vehicle(state, session, "trailer", "Schmitz", "CC9999CC")
     await step_grain(FakeMessage("Ріпак"), state, session)
     await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state, session)
     await step_driver_name(FakeMessage("Іван Водій"), state, session)
@@ -1396,7 +1428,6 @@ async def test_the_now_button_needs_a_time_field(
 async def test_grain_is_picked_from_the_hints(session, state, world, logist):
     """Підказка — це кнопка, а не довідник: у колонці лишається текст."""
     await fill_form_until_driver(state, session, logist, world.ours.id, grain=None)
-    await step_trailer_plate(FakeMessage("cc3333cc"), state, session)
 
     await step_grain_pick(
         FakeCallback(f"{TRIP_CHOICE_PREFIX}:grain:0"), state, session
@@ -1415,28 +1446,26 @@ async def test_typed_grain_still_works(session, state, world, logist):
     assert (await state.get_data())["grain_type"] == "Пшениця 2 клас"
 
 
-async def test_trailer_type_is_picked_from_the_hints(
+async def test_a_new_trailer_takes_its_kind_from_the_reference(
     session, state, world, logist, vtypes
 ):
-    await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
-    await step_ttn(FakeMessage("ТТН-999"), state, session)
-    await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
-    await step_client_pick(
-        FakeCallback(f"{TRIP_CLIENT_PREFIX}:{world.ours.id}"), state, session
+    """Вид нової машини — з довідника видів, без тягачів."""
+    await _upto_truck(state, session, logist, world)
+    await _new_vehicle(state, session, "truck", "Volvo", "aa1111aa")
+    await step_vehicle_new(
+        FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state, session
     )
-    await step_exporter(
-        FakeCallback(f"{TRIP_EXPORTER_PREFIX}:{world.ours.id}"), state, session
-    )
-    await step_truck(FakeMessage("Volvo"), state, session)
-    await step_truck_plate(FakeMessage("aa1111aa"), state, session)
-    await step_trailer(FakeMessage("Schmitz"), state, session)
+    assert await state.get_state() == TripForm.v_type
 
-    await step_trailer_type_pick(
+    await step_vehicle_type(
         FakeCallback(f"{TRIP_TTYPE_PREFIX}:{vtypes['Зерновоз'].id}"), state, session
     )
+    await step_vehicle_mark_name(FakeMessage("Schmitz"), state, session)
+    await step_vehicle_plate(FakeMessage("cc3333cc"), state, session)
 
-    assert (await state.get_data())["trailer_type"] == "Зерновоз"
-    assert await state.get_state() == TripForm.trailer_plate
+    trailer = await repository.get_vehicle_by_plate(session, "CC3333CC")
+    assert trailer.type_name == "Зерновоз"
+    assert (await state.get_data())["trailer_id"] == trailer.id
 
 
 async def test_editing_grain_by_button(session, state, logist, trips, publisher):
@@ -1543,7 +1572,7 @@ async def test_the_flag_does_not_outlive_one_correction(
     await fill_form(state, session, logist, exporter_id=world.ours.id)
     await on_redo(FakeCallback(TRIP_REDO), state)
     await on_redo_step(FakeCallback(f"{TRIP_REDO_PREFIX}:truck"), state, session)
-    await step_truck(FakeMessage("Scania R500"), state, session)
+    await _new_vehicle(state, session, "truck", "Scania R500", "bb9999bb")
     assert await state.get_state() == TripForm.confirm
 
     # Тепер звичайний прохід: після тягача має йти його номер, а не підсумок.
@@ -1571,8 +1600,10 @@ async def test_an_unknown_redo_key_is_refused(session, state, world, logist):
 
 
 @pytest.fixture
-async def vtypes(session):
-    return await seed_vehicle_types(session)
+async def vtypes(session, world):
+    return {
+        t.name: t for t in await repository.list_vehicle_types(session)
+    }
 
 
 @pytest.fixture
@@ -1623,13 +1654,10 @@ async def test_picking_a_truck_fills_make_and_plate(
     await _upto_truck(state, session, logist, world)
     assert await state.get_state() == TripForm.truck
 
-    await step_truck_pick(_pick("truck", fleet.tractor), state, session)
+    await step_vehicle_pick(_pick("truck", fleet.tractor), state, session)
 
-    data = await state.get_data()
-    assert data["truck_id"] == fleet.tractor.id
-    assert data["truck"] == "Volvo FH16"
-    assert data["truck_license_plate"] == "AA5555AA"
-    # Далі одразу причіп, а не номер тягача.
+    # У рейсі лишається саме посилання: марка й номер живуть у довіднику.
+    assert (await state.get_data())["truck_id"] == fleet.tractor.id
     assert await state.get_state() == TripForm.trailer
 
 
@@ -1637,15 +1665,12 @@ async def test_picking_a_trailer_brings_its_kind(session, state, world, logist, 
     """Вид причепа більше не питається: він властивість причепа, і доки жив
     у рейсі, «зерновоз» набирали заново для того самого причепа."""
     await _upto_truck(state, session, logist, world)
-    await step_truck_pick(_pick("truck", fleet.tractor), state, session)
+    await step_vehicle_pick(_pick("truck", fleet.tractor), state, session)
 
-    await step_trailer_pick(_pick("trailer", fleet.trailer), state, session)
+    await step_vehicle_pick(_pick("trailer", fleet.trailer), state, session)
 
-    data = await state.get_data()
-    assert data["trailer_id"] == fleet.trailer.id
-    assert data["trailer_type"] == "Зерновоз"
-    assert data["trailer_license_plate"] == "CC7777CC"
-    # Крок «вид причепа» пропущено — одразу культура.
+    assert (await state.get_data())["trailer_id"] == fleet.trailer.id
+    # Вид причепа окремим кроком не питається — він у самому причепі.
     assert await state.get_state() == TripForm.grain
 
 
@@ -1670,7 +1695,7 @@ async def test_a_foreign_vehicle_is_refused(session, state, world, logist, fleet
     await _upto_truck(state, session, logist, world)
     callback = _pick("truck", fleet.foreign)
 
-    await step_truck_pick(callback, state, session)
+    await step_vehicle_pick(callback, state, session)
 
     assert callback.answered == ["Невідомий транспорт"]
     assert "truck_id" not in await state.get_data()
@@ -1683,37 +1708,31 @@ async def test_a_trailer_cannot_be_picked_as_a_truck(
     await _upto_truck(state, session, logist, world)
     callback = _pick("truck", fleet.trailer)
 
-    await step_truck_pick(callback, state, session)
+    await step_vehicle_pick(callback, state, session)
 
     assert callback.answered == ["Невідомий транспорт"]
 
 
-async def test_a_trailer_with_the_trucks_plate_is_refused(
+async def test_a_trailer_cannot_be_the_truck_itself(
     session, state, world, logist, fleet
 ):
-    """Той самий номер у тягача й причепа — це одна машина двічі.
-
-    У довіднику таке неможливо: номер там унікальний. А от тягача могли
-    ввести руками — і саме тоді збіг і трапляється.
-    """
+    """Одна машина не може бути в рейсі і тягачем, і причепом."""
     await _upto_truck(state, session, logist, world)
-    await step_truck_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
-    await step_truck(FakeMessage("MAN TGX"), state, session)
-    await step_truck_plate(FakeMessage("cc7777cc"), state, session)  # номер причепа
+    await step_vehicle_pick(_pick("truck", fleet.tractor), state, session)
 
-    callback = _pick("trailer", fleet.trailer)
-    await step_trailer_pick(callback, state, session)
+    callback = _pick("trailer", fleet.tractor)
+    await step_vehicle_pick(callback, state, session)
 
-    assert callback.answered == ["Це номер тягача цього ж рейсу."]
-    assert "trailer_id" not in await state.get_data()
+    # Тягач у списку причепів не показується, тож це підроблений callback_data.
+    assert callback.answered == ["Невідомий транспорт"]
 
 
 async def test_a_trip_records_which_vehicles_it_used(
     session, state, world, logist, fleet, publisher
 ):
     await _upto_truck(state, session, logist, world)
-    await step_truck_pick(_pick("truck", fleet.tractor), state, session)
-    await step_trailer_pick(_pick("trailer", fleet.trailer), state, session)
+    await step_vehicle_pick(_pick("truck", fleet.tractor), state, session)
+    await step_vehicle_pick(_pick("trailer", fleet.trailer), state, session)
     await step_grain(FakeMessage("Пшениця"), state, session)
     await step_driver_manual(FakeCallback(TRIP_DRIVER_MANUAL), state, session)
     await step_driver_name(FakeMessage("Іван Водій"), state, session)
@@ -1727,19 +1746,30 @@ async def test_a_trip_records_which_vehicles_it_used(
     trips, _ = await repository.list_trips(session)
     assert trips[0].truck_id == fleet.tractor.id
     assert trips[0].trailer_id == fleet.trailer.id
+    # Вид причепа читається зі зв'язку, а не лежить копією в рейсі.
     assert trips[0].trailer_type == "Зерновоз"
 
 
-async def test_a_manual_vehicle_leaves_no_link(session, state, world, logist, publisher):
-    """Чужа машина: посилання порожнє, а марка з номером на місці — рейс
-    документ, і він має лишитись читабельним."""
+async def test_a_manual_vehicle_lands_in_the_reference(
+    session, state, world, logist, publisher
+):
+    """Чужа машина теж заводиться в довідник — із порожнім власником.
+
+    Інакше рейсу просто нема на що посилатись, а класти марку з номером у сам
+    рейс означало б знову тримати дві правди про один транспорт.
+    """
     callback = await fill_form(state, session, logist, exporter_id=world.ours.id)
     await step_confirm(callback, state, session, publisher, logist)
 
     trips, _ = await repository.list_trips(session)
-    assert trips[0].truck_id is None
-    assert trips[0].trailer_id is None
-    assert trips[0].truck == "Volvo FH16"
+    truck = trips[0].truck
+    assert truck.make_model == "Volvo FH16"
+    assert truck.license_plate == "AA1111AA"
+    assert truck.owner_company_id is None
+    # А отже наступного разу її вже видно у своєму списку? Ні — вона чужа,
+    # і в списку компанії не з'явиться.
+    ours = await repository.list_vehicles_for_pick(session, "truck", world.ours.id)
+    assert truck.id not in [v.id for v in ours]
 
 
 async def test_back_from_a_trailer_returns_to_the_truck_list(
@@ -1748,25 +1778,25 @@ async def test_back_from_a_trailer_returns_to_the_truck_list(
     """Тягач брали з довідника — «Назад» веде на його список, а не на номер,
     якого ніхто не вводив."""
     await _upto_truck(state, session, logist, world)
-    await step_truck_pick(_pick("truck", fleet.tractor), state, session)
+    await step_vehicle_pick(_pick("truck", fleet.tractor), state, session)
 
     await on_form_back(FakeCallback(TRIP_BACK), state, session)
 
     assert await state.get_state() == TripForm.truck
 
 
-async def test_back_from_a_trailer_returns_to_the_plate_when_typed(
-    session, state, world, logist
+async def test_back_from_a_new_vehicle_returns_to_its_list(
+    session, state, world, logist, fleet
 ):
-    """А якщо тягач вводили руками — на його номер."""
+    """Заведення машини — гілка всередині кроку, тож назад веде на той самий
+    вибір, з якого в неї зайшли."""
     await _upto_truck(state, session, logist, world)
-    await step_truck_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
-    await step_truck(FakeMessage("MAN TGX"), state, session)
-    await step_truck_plate(FakeMessage("BB2222BB"), state, session)
+    await step_vehicle_new(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:truck"), state, session)
+    assert await state.get_state() == TripForm.v_mark
 
     await on_form_back(FakeCallback(TRIP_BACK), state, session)
 
-    assert await state.get_state() == TripForm.truck_plate
+    assert await state.get_state() == TripForm.truck
 
 
 async def test_reassigning_a_truck_updates_link_and_copy(
@@ -1784,5 +1814,85 @@ async def test_reassigning_a_truck_updates_link_and_copy(
 
     updated = await repository.get_trip(session, trip.id)
     assert updated.truck_id == fleet.tractor.id
-    assert updated.truck == "Volvo FH16"
-    assert updated.truck_license_plate == "AA5555AA"
+    assert updated.truck.make_model == "Volvo FH16"
+    assert updated.truck.license_plate == "AA5555AA"
+
+
+# ---------------------------------------------------------------------------
+# Рейс тримає транспорт посиланням, а не копією
+# ---------------------------------------------------------------------------
+
+
+async def test_the_trip_reads_the_vehicle_it_points_at(
+    session, state, world, logist, fleet
+):
+    """Правка машини в довіднику одразу видна в рейсі — саме тому копій і
+    немає: дві правди про один транспорт розходяться при першій же зміні."""
+    trip = await make_trip(
+        session, world.logist, world.ours,
+        truck_id=fleet.tractor.id, trailer_id=fleet.trailer.id,
+    )
+    assert trip.truck.make_model == "Volvo FH16"
+
+    scania = await repository.get_vehicle_mark_by_name(session, "Scania R450")
+    await repository.update_vehicle(session, fleet.tractor, mark_id=scania.id)
+
+    reread = await repository.get_trip(session, trip.id)
+    assert reread.truck.make_model == "Scania R450"
+
+
+async def test_the_manager_comes_from_the_creator(session, world, logist):
+    """ПІБ і телефон менеджера теж не копіюються: created_by їх уже знає."""
+    trip = await make_trip(session, world.logist, world.ours)
+
+    assert trip.manager_fullname == world.logist.fullname
+    assert trip.manager_phone_number == world.logist.phone_number
+    assert trip.manager_tg == world.logist.tg_id
+
+
+async def test_a_deleted_vehicle_still_shows_in_its_trips(
+    session, world, logist, fleet
+):
+    """М'яке видалення саме для цього: рейс не має лишитись без транспорту."""
+    trip = await make_trip(
+        session, world.logist, world.ours,
+        truck_id=fleet.tractor.id, trailer_id=fleet.trailer.id,
+    )
+
+    await repository.delete_vehicle(session, fleet.tractor)
+
+    reread = await repository.get_trip(session, trip.id)
+    assert reread.truck.license_plate == "AA5555AA"
+    # А ось у виборі для нового рейсу її вже немає.
+    offered = await repository.list_vehicles_for_pick(session, "truck", world.ours.id)
+    assert fleet.tractor.id not in [v.id for v in offered]
+
+
+async def test_a_deleted_vehicle_cannot_be_picked_again(
+    session, state, world, logist, fleet
+):
+    """Сховати машину зі списку — не захист: callback_data можна переслати."""
+    await repository.delete_vehicle(session, fleet.tractor)
+    await _upto_truck(state, session, logist, world)
+
+    callback = _pick("truck", fleet.tractor)
+    await step_vehicle_pick(callback, state, session)
+
+    assert callback.answered == ["Невідомий транспорт"]
+
+
+async def test_the_card_shows_the_vehicle_and_the_manager(
+    session, state, world, chief, fleet
+):
+    trip = await make_trip(
+        session, world.logist, world.ours,
+        truck_id=fleet.tractor.id, trailer_id=fleet.trailer.id,
+    )
+    callback = FakeCallback(f"{TRIP_SHOW_PREFIX}:{trip.id}", user=FakeUser(CHIEF_ID))
+
+    await on_trip_card(callback, state, session, chief)
+
+    text = callback.message.answers[0]
+    assert "Volvo FH16 · AA5555AA" in text
+    assert "Schmitz SKO24 · CC7777CC (Зерновоз)" in text
+    assert "Марія Логіст" in text

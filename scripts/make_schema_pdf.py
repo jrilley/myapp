@@ -479,6 +479,7 @@ ORG_TABLES["vehicles"] = [
     ("mark_id", "INTEGER NOT NULL", "FK"),
     ("license_plate", "TEXT NOT NULL", "UQ"),
     ("owner_company_id", "INTEGER", "FK"),
+    ("deleted_at", "TEXT", ""),
 ]
 ORG_TABLES["vehicle_type"] = [
     ("id", "INTEGER", "PK"),
@@ -529,8 +530,11 @@ def page_organization(s: Sheet) -> None:
         right_x, vehicle_ty, right_w, "vehicles", ORG_TABLES["vehicles"],
         accent=RUST,
     )
-    s.text(right_x, vehicle_ty + 138,
-           "сама машина — це номер і власник; вид і марка приходять із довідників",
+    s.text(right_x, vehicle_ty + 156,
+           "сама машина — це номер і власник; вид і марка приходять із довідників,",
+           font="Sans", size=7.4, color=SLATE)
+    s.text(right_x, vehicle_ty + 168,
+           "а рядок не стирається: на нього посилаються рейси",
            font="Sans", size=7.4, color=SLATE)
 
     # Довідники виду й марки — у ліву колонку: під roles є місце, а права
@@ -609,13 +613,8 @@ TRIP_ENTERED = [
     ("client_company_id", "INTEGER", "FK"),
     ("client_company_name", "TEXT NOT NULL", ""),
     ("exporter_company_id", "INTEGER NOT NULL", "FK"),
-    ("truck_id", "INTEGER", "FK"),
-    ("truck", "TEXT NOT NULL", ""),
-    ("truck_license_plate", "TEXT NOT NULL", ""),
-    ("trailer_id", "INTEGER", "FK"),
-    ("trailer", "TEXT NOT NULL", ""),
-    ("trailer_type", "TEXT NOT NULL", ""),
-    ("trailer_license_plate", "TEXT NOT NULL", ""),
+    ("truck_id", "INTEGER NOT NULL", "FK"),
+    ("trailer_id", "INTEGER NOT NULL", "FK"),
     ("grain_type", "TEXT NOT NULL", ""),
     ("driver_id", "INTEGER", "FK"),
     ("driver_fullname", "TEXT NOT NULL", ""),
@@ -626,9 +625,6 @@ TRIP_DERIVED = [
     ("id", "INTEGER", "PK"),
     ("owner_company_id", "INTEGER NOT NULL", "FK"),
     ("created_by", "INTEGER NOT NULL", "FK"),
-    ("logist_fullname", "TEXT NOT NULL", ""),
-    ("logist_phone_number", "TEXT NOT NULL", ""),
-    ("logist_tg", "BIGINT NOT NULL", ""),
     ("created_at", "TEXT NOT NULL", ""),
     ("status", "TEXT NOT NULL", ""),
 ]
@@ -652,7 +648,7 @@ TRIP_STEPS = [
     ("02", "Дата прибуття", "календар, не текст"),
     ("03", "Замовник", "зі списку або вручну"),
     ("04", "Експортер", "кнопки: назва + ІПН"),
-    ("05", "Тягач", "з довідника або вручну"),
+    ("05", "Тягач", "з довідника або нова"),
     ("06", "Причіп", "вид приходить із ним"),
     ("07", "Культура", "кнопки або текст"),
     ("08", "Водій", "зі складу або вручну"),
@@ -686,9 +682,10 @@ def page_trip(s: Sheet) -> None:
            "обирають зі списку або вводять руками — вони цілком можуть бути поза "
            "системою. А от компанію-власника й контакти менеджера бот не питає: "
            "вони беруться з рядка employees того, хто заповнює форму. Саме за "
-           "власником працюють доступ і дублювання в робочий чат. Тягач і причіп "
-           "беруться з довідника vehicles: марка, номер, а для причепа й вид "
-           "приходять разом із машиною.",
+           "власником працюють доступ і дублювання в робочий чат. Тягач і причіп — "
+           "це посилання на vehicles: марка, номер і вид причепа читаються звідти. "
+           "Чужа машина не виняток — вона теж заводиться в довідник, із порожнім "
+           "власником.",
            size=8.6, leading=11.5)
     s.text(s.W - M, 76, "аркуш 5 / 5", font="Mono", size=8, color=SLATE, align="right")
 
@@ -715,7 +712,7 @@ def page_trip(s: Sheet) -> None:
 
     # Ліва колонка виросла до 16 рядків — секція кроків іде під нею. Кроків
     # стало дев'ять, тож вони вміщуються в один ряд.
-    ty2 = s.section(M, 545, s.W - 2 * M, "порядок кроків")
+    ty2 = s.section(M, 512, s.W - 2 * M, "порядок кроків")
     per_row = len(TRIP_STEPS)
     chip_w = (s.W - 2 * M - (per_row - 1) * 10) / per_row
     for i, (num, title, rule) in enumerate(TRIP_STEPS):
@@ -727,20 +724,21 @@ def page_trip(s: Sheet) -> None:
         s.text(cx + 32, cy + 18, title, font="Sans-Bold", size=8.5, color=INK)
         s.text(cx + 32, cy + 33, rule, font="Mono", size=7, color=SLATE)
 
-    note_ty = 630
+    note_ty = 600
     s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
     s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
     s.wrap(M + 12, note_ty + 18, s.W - 2 * M - 24,
            "Відхилення від вихідного опису. client_company та exporter_company "
            "оголошені INTEGER із зовнішнім ключем, а не TEXT: у полі лежить "
            "company.id, і зв'язок має бути справжнім. edited_by лишили nullable — "
-           "NOT NULL суперечив би вимозі «при створенні порожнє». Додано "
-           "logist_tg, щоб із рейсу можна було написати менеджеру, і driver_id — "
-           "щоб було кого сповістити. Колонки досі звуться logist_*, підпис у "
-           "документі — «Менеджер».",
+           "NOT NULL суперечив би вимозі «при створенні порожнє». Додано driver_id, "
+           "щоб було кого сповістити. Копії logist_* прибрані: менеджер — це "
+           "created_by, і його ПІБ із телефоном читаються звідти. Так само "
+           "прибрані п'ять текстових колонок про транспорт — він тепер посилання "
+           "на vehicles.",
            size=8, leading=10.5, color=AMBER)
 
-    ty3 = s.section(M, 692, s.W - 2 * M, "хто які рейси бачить")
+    ty3 = s.section(M, 672, s.W - 2 * M, "хто які рейси бачить")
     for i, (who, what) in enumerate(VISIBILITY):
         s.text(M, ty3 + 12 + i * 16, who, font="Sans-Bold", size=8, color=INK)
         s.text(M + 170, ty3 + 12 + i * 16, what, font="Mono", size=7.5, color=SLATE)

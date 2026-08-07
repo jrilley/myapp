@@ -461,7 +461,11 @@ async def get_vehicle_by_plate(
     session: AsyncSession, license_plate: str
 ) -> Vehicle | None:
     """Номер унікальний на весь довідник: одна машина не може бути й тягачем,
-    і причепом, а номери в тягачів і причепів не перетинаються."""
+    і причепом, а номери в тягачів і причепів не перетинаються.
+
+    Видалені теж повертаємо: номер за ними лишається зайнятим, і мовчки
+    завести другу машину з тим самим номером не можна.
+    """
     return await session.scalar(
         select(Vehicle)
         .where(Vehicle.license_plate == license_plate)
@@ -505,14 +509,17 @@ async def list_company_vehicles(
     condition = _of_kind(kind)
     if condition is None:
         return [], 0
-    # join, а не where по колонці: «тягач чи причіп» тепер живе у довіднику.
-    base = select(Vehicle).join(Vehicle.type).where(
-        Vehicle.owner_company_id == company_id, condition
+    filters = (
+        Vehicle.owner_company_id == company_id,
+        # Видалена машина зникає зі списків і з вибору в рейсі, але старі
+        # рейси на неї далі посилаються.
+        Vehicle.deleted_at.is_(None),
+        condition,
     )
+    # join, а не where по колонці: «тягач чи причіп» тепер живе у довіднику.
+    base = select(Vehicle).join(Vehicle.type).where(*filters)
     total = await session.scalar(
-        select(func.count()).select_from(Vehicle).join(Vehicle.type).where(
-            Vehicle.owner_company_id == company_id, condition
-        )
+        select(func.count()).select_from(Vehicle).join(Vehicle.type).where(*filters)
     )
     stmt = (
         base.options(*_vehicle_with_links())
@@ -535,15 +542,30 @@ async def list_vehicles_for_pick(
     return vehicles
 
 
-async def delete_vehicle(session: AsyncSession, vehicle: Vehicle) -> None:
-    """Транспорт стирається назовсім, на відміну від рейсу.
+async def delete_vehicle(session: AsyncSession, vehicle: Vehicle) -> Vehicle:
+    """Позначає машину видаленою — рядок лишається.
 
-    М'яке видалення тут нічого не дало б: історія перевезень зберігає марку
-    й номер копією в самому рейсі, тож на неї це не впливає. А ось унікальний
-    держномер лишався б зайнятим назавжди.
+    Раніше він стирався назовсім, і це було правильно: рейс тримав марку з
+    номером власною копією, тож історія не страждала. Тепер рейс на машину
+    посилається, і стерти рядок означало б лишити перевезення без транспорту.
     """
-    await session.delete(vehicle)
+    vehicle.deleted_at = _utc_now()
     await session.commit()
+    return vehicle
+
+
+async def count_vehicle_trips(session: AsyncSession, vehicle_id: int) -> int:
+    """Скільки рейсів на цю машину посилаються — і як тягач, і як причіп."""
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Trip)
+            .where(
+                or_(Trip.truck_id == vehicle_id, Trip.trailer_id == vehicle_id)
+            )
+        )
+        or 0
+    )
 
 
 async def update_vehicle(session: AsyncSession, vehicle: Vehicle, **fields) -> Vehicle:
@@ -582,11 +604,17 @@ async def list_company_employees(
 
 
 def _trip_with_links():
+    # Транспорт тягнемо разом із його видом і маркою: у рейсі вони тепер лише
+    # посиланням, а картка показує назви.
     return (
+        selectinload(Trip.truck).selectinload(Vehicle.type),
+        selectinload(Trip.truck).selectinload(Vehicle.mark),
+        selectinload(Trip.trailer).selectinload(Vehicle.type),
+        selectinload(Trip.trailer).selectinload(Vehicle.mark),
+        selectinload(Trip.creator),
         selectinload(Trip.owner_company),
         selectinload(Trip.client_company),
         selectinload(Trip.exporter_company),
-        selectinload(Trip.creator),
         selectinload(Trip.driver),
     )
 

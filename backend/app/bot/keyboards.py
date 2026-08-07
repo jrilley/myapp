@@ -68,6 +68,9 @@ TRIP_STATUS_PREFIX = "trip:st"
 TRIP_CHOICE_PREFIX = "trip:pick"
 #: Вид причепа при ручному вводі: trip:ttype:<id у vehicle_type>.
 TRIP_TTYPE_PREFIX = "trip:ttype"
+#: Марка при заведенні машини з анкети: trip:mark:<id> або нова.
+TRIP_MARK_PREFIX = "trip:mark"
+TRIP_MARK_NEW = "trip:mark:new"
 #: Час заїзду/виїзду: поточний момент або очистити поле.
 TRIP_NOW = "trip:now"
 TRIP_CLEAR = "trip:clear"
@@ -891,6 +894,32 @@ def trip_trailer_type_keyboard(types, *, back: bool = False) -> InlineKeyboardMa
         )
     builder.adjust(2)
     _step_row(builder, back=back)
+    return builder.as_markup()
+
+
+def trip_vehicle_type_keyboard(types) -> InlineKeyboardMarkup:
+    """Вид машини, яку заводять просто з анкети. Той самий довідник, що й у
+    транспорті, — просто потрібна половина."""
+    builder = InlineKeyboardBuilder()
+    for vehicle_type in types:
+        builder.button(
+            text=vehicle_type.name,
+            callback_data=f"{TRIP_TTYPE_PREFIX}:{vehicle_type.id}",
+        )
+    builder.adjust(2)
+    _step_row(builder, back=True)
+    return builder.as_markup()
+
+
+def trip_mark_keyboard(marks) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for mark in marks:
+        builder.button(text=mark.name, callback_data=f"{TRIP_MARK_PREFIX}:{mark.id}")
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(text="➕ Додати марку", callback_data=TRIP_MARK_NEW)
+    )
+    _step_row(builder, back=True)
     return builder.as_markup()
 
 

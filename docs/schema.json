@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "ca25af309fa0",
+  "alembic_head": "143f904d1151",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -1098,6 +1098,24 @@
           "unique": false,
           "references": "company.id",
           "description": "Компанія-власник. За нею працює обсяг доступу: у списку транспорту видно машини своєї компанії. Nullable — власника могли не вказати."
+        },
+        {
+          "name": "deleted_at",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": true,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Мітка м'якого видалення, ISO-8601 UTC; NULL = машина в роботі. Рядок не стирається: на нього посилаються рейси, і стерти його означало б лишити перевезення без транспорту."
         }
       ],
       "unique_constraints": [
@@ -1312,61 +1330,7 @@
           "on_update": null,
           "unique": false,
           "references": "employees.id",
-          "description": "Хто створив рейс. У самій заявці не показується."
-        },
-        {
-          "name": "logist_fullname",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "ПІБ логіста на момент створення (копія employees.fullname)."
-        },
-        {
-          "name": "logist_phone_number",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Телефон логіста на момент створення (копія employees.phone_number)."
-        },
-        {
-          "name": "logist_tg",
-          "type": {
-            "generic": "BIGINT",
-            "sqlite": "BIGINT",
-            "postgresql": "BIGINT"
-          },
-          "python_type": "int",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Telegram id логіста (копія employees.tg_id) — щоб із заявки можна було написати."
+          "description": "Хто створив рейс — він же менеджер у документі. ПІБ, телефон і Telegram id читаються з employees через цей зв'язок, а не дублюються трьома колонками."
         },
         {
           "name": "truck_id",
@@ -1376,7 +1340,7 @@
             "postgresql": "INTEGER"
           },
           "python_type": "int",
-          "nullable": true,
+          "nullable": false,
           "primary_key": false,
           "autoincrement": false,
           "default": null,
@@ -1384,43 +1348,7 @@
           "on_update": null,
           "unique": false,
           "references": "vehicles.id",
-          "description": "Тягач із довідника, якщо його обрали зі списку. Порожній — введений вручну."
-        },
-        {
-          "name": "truck",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Тягач: марка й модель."
-        },
-        {
-          "name": "truck_license_plate",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Державний номер тягача."
+          "description": "Тягач із довідника vehicles."
         },
         {
           "name": "trailer_id",
@@ -1430,7 +1358,7 @@
             "postgresql": "INTEGER"
           },
           "python_type": "int",
-          "nullable": true,
+          "nullable": false,
           "primary_key": false,
           "autoincrement": false,
           "default": null,
@@ -1438,61 +1366,7 @@
           "on_update": null,
           "unique": false,
           "references": "vehicles.id",
-          "description": "Причіп із довідника, якщо його обрали зі списку."
-        },
-        {
-          "name": "trailer",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Причіп: марка й модель."
-        },
-        {
-          "name": "trailer_type",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Вид причепа (зерновоз, самоскид тощо). При виборі з довідника береться з vehicles.type — це властивість причепа, не рейсу."
-        },
-        {
-          "name": "trailer_license_plate",
-          "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
-          },
-          "python_type": "str",
-          "nullable": false,
-          "primary_key": false,
-          "autoincrement": false,
-          "default": null,
-          "server_default": null,
-          "on_update": null,
-          "unique": false,
-          "references": null,
-          "description": "Державний номер причепа. Не може збігатися з номером тягача."
+          "description": "Причіп із довідника vehicles."
         },
         {
           "name": "grain_type",
