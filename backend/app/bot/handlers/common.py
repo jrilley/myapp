@@ -26,6 +26,7 @@ from app.bot.actions import (
     render_positions,
     render_stats,
     render_trips,
+    render_vehicle_types,
 )
 from app.bot.keyboards import (
     DELETE_PREFIX,
@@ -246,15 +247,16 @@ async def on_page(
         # Обсяг видимого визначає render_trips за правами — у callback_data
         # немає нічого, чим його можна було б розширити.
         rendered = await render_trips(session, access, offset=offset)
-    elif kind in ("pos", "comp"):
+    elif kind in ("pos", "comp", "vtype"):
         if not access.is_main_admin:
             await callback.answer(MAIN_ADMIN_ONLY, show_alert=True)
             return
-        rendered = (
-            await render_positions(session, offset=offset)
-            if kind == "pos"
-            else await render_companies(session, offset=offset)
-        )
+        renderers = {
+            "pos": render_positions,
+            "comp": render_companies,
+            "vtype": render_vehicle_types,
+        }
+        rendered = await renderers[kind](session, offset=offset)
     elif kind == "cemp" and args:
         if not access.can(CATEGORY_EMPLOYEES):
             await callback.answer(DENIED, show_alert=True)

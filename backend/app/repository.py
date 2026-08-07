@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import (
-    VEHICLE_TRACTOR,
     Application,
     ApplicationStatus,
     Company,
@@ -21,6 +20,8 @@ from app.models import (
     RolePermission,
     Trip,
     Vehicle,
+    VehicleMark,
+    VehicleType,
 )
 
 
@@ -347,19 +348,113 @@ async def count_position_employees(session: AsyncSession, position_id: int) -> i
 # Транспорт
 # ---------------------------------------------------------------------------
 
-#: Половини списку транспорту. Це не колонка й не тип: «тягач» — це рівно
-#: `type == VEHICLE_TRACTOR`, а «причіп» — усе інше. Ключі збігаються з
-#: callback_data кнопок вибору.
+#: Половини списку транспорту. Це не колонка: «тягач» — рівно те, що
+#: позначене прапорцем у довіднику видів, «причіп» — усе інше. Ключі
+#: збігаються з callback_data кнопок вибору.
 VEHICLE_KINDS = ("truck", "trailer")
 
 
 def _of_kind(kind: str):
     """Умова відбору для однієї половини списку, або None для невідомого."""
     if kind == "truck":
-        return Vehicle.type == VEHICLE_TRACTOR
+        return VehicleType.is_tractor.is_(True)
     if kind == "trailer":
-        return Vehicle.type != VEHICLE_TRACTOR
+        return VehicleType.is_tractor.is_(False)
     return None
+
+
+def _vehicle_with_links():
+    """Вид, марка й власник — усе, що читає картка. В async-сесії ліниве
+    завантаження кидає MissingGreenlet, тож тягнемо одразу."""
+    return (
+        selectinload(Vehicle.type),
+        selectinload(Vehicle.mark),
+        selectinload(Vehicle.owner_company),
+    )
+
+
+# --- довідник видів ---------------------------------------------------------
+
+
+async def list_vehicle_types(
+    session: AsyncSession, *, tractors: bool | None = None
+) -> list[VehicleType]:
+    stmt = select(VehicleType).order_by(VehicleType.is_tractor.desc(), VehicleType.name)
+    if tractors is not None:
+        stmt = stmt.where(VehicleType.is_tractor.is_(tractors))
+    return list(await session.scalars(stmt))
+
+
+async def page_vehicle_types(
+    session: AsyncSession, *, limit: int = 10, offset: int = 0
+) -> tuple[list[VehicleType], int]:
+    total = await session.scalar(select(func.count()).select_from(VehicleType))
+    stmt = (
+        select(VehicleType)
+        .order_by(VehicleType.is_tractor.desc(), VehicleType.name)
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(await session.scalars(stmt)), int(total or 0)
+
+
+async def get_vehicle_type(session: AsyncSession, type_id: int) -> VehicleType | None:
+    return await session.get(VehicleType, type_id)
+
+
+async def get_vehicle_type_by_name(
+    session: AsyncSession, name: str
+) -> VehicleType | None:
+    return await session.scalar(select(VehicleType).where(VehicleType.name == name))
+
+
+async def create_vehicle_type(
+    session: AsyncSession, *, name: str, is_tractor: bool = False
+) -> VehicleType:
+    vehicle_type = VehicleType(name=name, is_tractor=is_tractor)
+    session.add(vehicle_type)
+    await session.commit()
+    await session.refresh(vehicle_type)
+    return vehicle_type
+
+
+async def count_type_vehicles(session: AsyncSession, type_id: int) -> int:
+    return int(
+        await session.scalar(
+            select(func.count()).select_from(Vehicle).where(Vehicle.type_id == type_id)
+        )
+        or 0
+    )
+
+
+# --- довідник марок ---------------------------------------------------------
+
+
+async def list_vehicle_marks(session: AsyncSession, *, limit: int = 50) -> list[VehicleMark]:
+    return list(
+        await session.scalars(select(VehicleMark).order_by(VehicleMark.name).limit(limit))
+    )
+
+
+async def get_vehicle_mark(session: AsyncSession, mark_id: int) -> VehicleMark | None:
+    return await session.get(VehicleMark, mark_id)
+
+
+async def get_vehicle_mark_by_name(
+    session: AsyncSession, name: str
+) -> VehicleMark | None:
+    return await session.scalar(select(VehicleMark).where(VehicleMark.name == name))
+
+
+async def create_vehicle_mark(session: AsyncSession, *, name: str) -> VehicleMark:
+    mark = VehicleMark(name=name)
+    session.add(mark)
+    await session.commit()
+    await session.refresh(mark)
+    return mark
+
+
+# --- сам транспорт ----------------------------------------------------------
 
 
 async def get_vehicle_by_plate(
@@ -368,35 +463,34 @@ async def get_vehicle_by_plate(
     """Номер унікальний на весь довідник: одна машина не може бути й тягачем,
     і причепом, а номери в тягачів і причепів не перетинаються."""
     return await session.scalar(
-        select(Vehicle).where(Vehicle.license_plate == license_plate)
+        select(Vehicle)
+        .where(Vehicle.license_plate == license_plate)
+        .options(*_vehicle_with_links())
     )
 
 
 async def create_vehicle(
     session: AsyncSession,
     *,
-    type: str,
-    make_model: str,
+    type_id: int,
+    mark_id: int,
     license_plate: str,
     owner_company_id: int | None,
 ) -> Vehicle:
     vehicle = Vehicle(
-        type=type,
-        make_model=make_model,
+        type_id=type_id,
+        mark_id=mark_id,
         license_plate=license_plate,
         owner_company_id=owner_company_id,
     )
     session.add(vehicle)
     await session.commit()
-    await session.refresh(vehicle)
-    return vehicle
+    return await get_vehicle(session, vehicle.id)
 
 
 async def get_vehicle(session: AsyncSession, vehicle_id: int) -> Vehicle | None:
     return await session.scalar(
-        select(Vehicle)
-        .where(Vehicle.id == vehicle_id)
-        .options(selectinload(Vehicle.owner_company))
+        select(Vehicle).where(Vehicle.id == vehicle_id).options(*_vehicle_with_links())
     )
 
 
@@ -411,14 +505,19 @@ async def list_company_vehicles(
     condition = _of_kind(kind)
     if condition is None:
         return [], 0
-    filters = (Vehicle.owner_company_id == company_id, condition)
+    # join, а не where по колонці: «тягач чи причіп» тепер живе у довіднику.
+    base = select(Vehicle).join(Vehicle.type).where(
+        Vehicle.owner_company_id == company_id, condition
+    )
     total = await session.scalar(
-        select(func.count()).select_from(Vehicle).where(*filters)
+        select(func.count()).select_from(Vehicle).join(Vehicle.type).where(
+            Vehicle.owner_company_id == company_id, condition
+        )
     )
     stmt = (
-        select(Vehicle)
-        .where(*filters)
-        .order_by(Vehicle.type, Vehicle.make_model, Vehicle.license_plate)
+        base.options(*_vehicle_with_links())
+        .join(Vehicle.mark)
+        .order_by(VehicleType.name, VehicleMark.name, Vehicle.license_plate)
         .limit(limit)
         .offset(offset)
     )
@@ -452,6 +551,8 @@ async def update_vehicle(session: AsyncSession, vehicle: Vehicle, **fields) -> V
         setattr(vehicle, name, value)
     await session.commit()
     vehicle_id = vehicle.id
+    # expire_on_commit=False лишає в identity map старі зв'язки, тож зміна
+    # type_id сама по собі не перечитала б vehicle.type.
     session.expire(vehicle)
     return await get_vehicle(session, vehicle_id)
 

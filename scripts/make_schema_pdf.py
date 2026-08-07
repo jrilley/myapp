@@ -475,10 +475,19 @@ MATRIX_ROWS = [
 
 ORG_TABLES["vehicles"] = [
     ("id", "INTEGER", "PK"),
-    ("type", "TEXT NOT NULL", "IX"),
-    ("make_model", "TEXT NOT NULL", ""),
+    ("type_id", "INTEGER NOT NULL", "FK"),
+    ("mark_id", "INTEGER NOT NULL", "FK"),
     ("license_plate", "TEXT NOT NULL", "UQ"),
     ("owner_company_id", "INTEGER", "FK"),
+]
+ORG_TABLES["vehicle_type"] = [
+    ("id", "INTEGER", "PK"),
+    ("name", "TEXT NOT NULL", "UQ"),
+    ("is_tractor", "BOOLEAN NOT NULL", ""),
+]
+ORG_TABLES["vehicle_mark"] = [
+    ("id", "INTEGER", "PK"),
+    ("name", "TEXT NOT NULL", "UQ"),
 ]
 
 
@@ -497,8 +506,10 @@ def page_organization(s: Sheet) -> None:
            size=8.6, leading=11.5)
     s.text(s.W - M, 76, "аркуш 3 / 5", font="Mono", size=8, color=SLATE, align="right")
 
-    left_x, left_w = M, 330
-    right_x, right_w = 620, 380
+    # Ліва колонка ширша: під нею стоять два довідники поруч, і вузькі
+    # блоки різали б підписи типів.
+    left_x, left_w = M, 520
+    right_x, right_w = 700, 380
 
     ty = s.section(left_x, 150, left_w, "довідники")
     bottoms = {}
@@ -519,7 +530,22 @@ def page_organization(s: Sheet) -> None:
         accent=RUST,
     )
     s.text(right_x, vehicle_ty + 138,
-           "тягачі й причепи разом; «тягач» — це рівно type = «Тягач»",
+           "сама машина — це номер і власник; вид і марка приходять із довідників",
+           font="Sans", size=7.4, color=SLATE)
+
+    # Довідники виду й марки — у ліву колонку: під roles є місце, а права
+    # закінчується самими машинами.
+    ref_ty = 500
+    ref_w = (left_w - 20) // 2
+    s.entity(
+        left_x, ref_ty, ref_w, "vehicle_type", ORG_TABLES["vehicle_type"],
+    )
+    s.entity(
+        left_x + ref_w + 20, ref_ty, ref_w, "vehicle_mark",
+        ORG_TABLES["vehicle_mark"],
+    )
+    s.text(left_x, ref_ty + 106,
+           "is_tractor — прапорець, а не назва виду",
            font="Sans", size=7.4, color=SLATE)
 
     # Стрілки від FK-колонок employees до відповідних таблиць.
@@ -535,7 +561,7 @@ def page_organization(s: Sheet) -> None:
         s.arrow(right_x - 30, to_ty, left_x + left_w, to_ty, color=TEAL, width=1.2,
                 head=5)
 
-    note_ty = 556
+    note_ty = 600
     s.box(M, note_ty, s.W - 2 * M, 44, fill=AMBER_SOFT, stroke=AMBER_SOFT)
     s.line(M, note_ty, M, note_ty + 44, color=AMBER, width=2.5)
     s.wrap(M + 12, note_ty + 18, s.W - 2 * M - 24,
@@ -545,7 +571,7 @@ def page_organization(s: Sheet) -> None:
            "перевіряють — див. tests/test_organization.py.",
            size=8, leading=10.5, color=AMBER)
 
-    ty2 = s.section(M, 624, s.W - 2 * M, "відхилення від вихідного ddl")
+    ty2 = s.section(M, 672, s.W - 2 * M, "відхилення від вихідного ddl")
     s.wrap(M, ty2 + 10, s.W - 2 * M,
            "tg_id оголошено BIGINT, а не INTEGER. У SQLite різниці немає — там "
            "INTEGER і так 64-бітний. Але в PostgreSQL INTEGER 32-бітний, і "
@@ -554,7 +580,7 @@ def page_organization(s: Sheet) -> None:
            "applications.telegram_user_id.",
            size=8, leading=10.5)
 
-    ty3 = s.section(M, 700, s.W - 2 * M, "посада й роль розведені")
+    ty3 = s.section(M, 722, s.W - 2 * M, "посада й роль розведені")
     for i, (left, right) in enumerate((
         ("новий співробітник", "посада «Водій» і роль «Водій» — анкета їх не питає"),
         ("будь-яка інша посада", "призначає головний адміністратор, з картки"),

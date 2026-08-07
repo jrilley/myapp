@@ -41,6 +41,7 @@ from app.bot.keyboards import (
     positions_keyboard,
     trips_keyboard,
     vehicle_list_keyboard,
+    vehicle_types_keyboard,
 )
 from app.bot.publisher import Publisher
 from app.models import ApplicationStatus
@@ -183,6 +184,25 @@ async def render_company_vehicles(
     header = f"<b>{title}</b> — {_range_note(offset, len(vehicles), total)}"
     return header, vehicle_list_keyboard(
         vehicles, kind, company_id, offset=offset, total=total, back=back
+    )
+
+
+async def render_vehicle_types(session: AsyncSession, *, offset: int = 0) -> Rendered:
+    """Довідник видів транспорту. Тягачі вгорі: саме вони визначають, у якій
+    половині списку опиниться машина."""
+    types, total = await repository.page_vehicle_types(
+        session, limit=PAGE_REFERENCE, offset=offset
+    )
+    if not types:
+        return (
+            "Довідник видів транспорту порожній.",
+            vehicle_types_keyboard(),
+        )
+
+    header = f"<b>Види транспорту</b> — {_range_note(offset, len(types), total)}"
+    return (
+        f"{header}\n🚛 — тягач, 🚚 — причіп. Оберіть, щоб переглянути:",
+        vehicle_types_keyboard(types, offset=offset, total=total),
     )
 
 

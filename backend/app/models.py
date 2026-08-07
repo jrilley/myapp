@@ -351,14 +351,11 @@ class Employee(Base):
 # ---------------------------------------------------------------------------
 
 
-#: Види транспорту. Перший — тягач, решта — причепи: цим вони й
-#: розрізняються, окремої колонки «тягач чи причіп» не потрібно.
-#:
-#: Вид причепа — властивість самого причепа, а не рейсу. Доки він жив у
-#: `trips.trailer_type`, «зерновоз» набирали заново в кожному рейсі, включно
-#: з десятим рейсом того самого причепа.
+#: Види транспорту, якими засівається довідник `vehicle_type`. Це стартовий
+#: набір, а не перелік дозволеного: далі види живуть у базі, і поповнює їх
+#: головний адміністратор.
 VEHICLE_TRACTOR = "Тягач"
-VEHICLE_TYPES = (
+VEHICLE_TYPE_SEED = (
     VEHICLE_TRACTOR,
     "Зерновоз",
     "Самоскид",
@@ -370,34 +367,75 @@ VEHICLE_TYPES = (
 )
 
 
-#: Види причепів — усе, крім тягача. Виводиться, а не переписується руками:
-#: інакше два переліки розійшлись би при першому ж новому виді.
-TRAILER_TYPES = tuple(t for t in VEHICLE_TYPES if t != VEHICLE_TRACTOR)
+class VehicleType(Base):
+    """Вид транспорту: «Тягач», «Зерновоз», «Самоскид».
+
+    Довідник, а не перелік у коді: додати вид має бути дією адміністратора,
+    а не релізом.
+    """
+
+    __tablename__ = "vehicle_type"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True, doc="Назва виду, унікальна."
+    )
+    is_tractor: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="0",
+        doc=(
+            "Чи це тягач. Окрема колонка, а не порівняння назви з «Тягач»: "
+            "довідник поповнюють люди, і «Сідловий тягач» або перейменований "
+            "рядок мовчки зламали б поділ списку на тягачі й причепи."
+        ),
+    )
+
+    vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="type")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<VehicleType id={self.id} name={self.name!r}>"
 
 
-def is_tractor(vehicle_type: str) -> bool:
-    return vehicle_type == VEHICLE_TRACTOR
+class VehicleMark(Base):
+    """Марка й модель одним рядком: «Volvo FH16», «Schmitz SKO24».
+
+    Окремою таблицею, щоб та сама модель не вводилась щоразу заново — і не
+    розходилась написанням, як це вже траплялось із культурами.
+    """
+
+    __tablename__ = "vehicle_mark"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True, doc="Марка й модель, як їх називають."
+    )
+
+    vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="mark")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<VehicleMark id={self.id} name={self.name!r}>"
 
 
 class Vehicle(Base):
-    """Тягач або причіп.
-
-    Одна таблиця на обидва, а не дві однакові: відрізняються вони лише
-    значенням `type`, і доки таблиць було дві, кожна зміна робилась двічі —
-    або не робилась удруге.
-    """
+    """Транспортний засіб: вид і марка з довідників плюс те, що належить
+    саме цій машині, — номер і власник."""
 
     __tablename__ = "vehicles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    type: Mapped[str] = mapped_column(
-        Text,
+    type_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicle_type.id"),
         nullable=False,
         index=True,
-        doc="Вид із VEHICLE_TYPES: «Тягач» або вид причепа («Зерновоз» тощо).",
+        doc="Вид із довідника vehicle_type.",
     )
-    make_model: Mapped[str] = mapped_column(
-        Text, nullable=False, doc="Марка й модель одним рядком, як їх називають."
+    mark_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicle_mark.id"),
+        nullable=False,
+        index=True,
+        doc="Марка й модель із довідника vehicle_mark.",
     )
     license_plate: Mapped[str] = mapped_column(
         Text, nullable=False, unique=True, doc="Державний номер, унікальний."
@@ -411,6 +449,8 @@ class Vehicle(Base):
         ),
     )
 
+    type: Mapped["VehicleType"] = relationship(back_populates="vehicles")
+    mark: Mapped["VehicleMark"] = relationship(back_populates="vehicles")
     owner_company: Mapped["Company | None"] = relationship(back_populates="vehicles")
 
     __table_args__ = (
@@ -419,12 +459,23 @@ class Vehicle(Base):
         UniqueConstraint("license_plate", name="uq_vehicles_license_plate"),
     )
 
+    # Вид і марку читаємо властивостями: так решта коду не знає, що вони
+    # приїхали з інших таблиць, і не розсипається на .type.name по всіх
+    # клавіатурах і картках.
+    @property
+    def type_name(self) -> str:
+        return self.type.name
+
+    @property
+    def make_model(self) -> str:
+        return self.mark.name
+
     @property
     def is_tractor(self) -> bool:
-        return is_tractor(self.type)
+        return self.type.is_tractor
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<Vehicle id={self.id} type={self.type!r} plate={self.license_plate!r}>"
+        return f"<Vehicle id={self.id} plate={self.license_plate!r}>"
 
 
 # ---------------------------------------------------------------------------

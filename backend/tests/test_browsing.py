@@ -19,7 +19,7 @@ from app.bot.access import (
 )
 from app.bot.handlers.management import on_company_card, on_company_employees
 from app.bot.handlers.vehicles import (
-    edit_make_model,
+    edit_mark_name,
     edit_plate,
     on_company_vehicles,
     on_my_vehicles,
@@ -39,6 +39,8 @@ from app.bot.keyboards import (
 from app.bot.states import VehicleEdit
 from app.models import Company, Employee, Position, Role, Vehicle
 from tests.conftest import (
+    seed_vehicle_mark,
+    seed_vehicle_types,
     ADMIN_ID,
     OWNER_ID,
     FakeCallback,
@@ -72,12 +74,17 @@ async def two_companies(session):
     )
     await session.commit()
 
+    types = await seed_vehicle_types(session)
+    marks = {
+        name: await seed_vehicle_mark(session, name)
+        for name in ("Volvo FH", "Scania R450", "Schmitz SKO")
+    }
     session.add_all([
-        Vehicle(type="Тягач", make_model="Volvo FH",
+        Vehicle(type_id=types["Тягач"].id, mark_id=marks["Volvo FH"].id,
                 license_plate="AA1111AA", owner_company_id=ours.id),
-        Vehicle(type="Тягач", make_model="Scania R450",
+        Vehicle(type_id=types["Тягач"].id, mark_id=marks["Scania R450"].id,
                 license_plate="BB2222BB", owner_company_id=theirs.id),
-        Vehicle(type="Зерновоз", make_model="Schmitz SKO",
+        Vehicle(type_id=types["Зерновоз"].id, mark_id=marks["Schmitz SKO"].id,
                 license_plate="CC3333CC", owner_company_id=ours.id),
     ])
     await repository.create_employee(
@@ -268,15 +275,15 @@ async def test_vehicle_card_shows_details(session, state, access_admin, two_comp
     assert "Alebor IT" in text
 
 
-async def test_editing_make_model_updates_the_row(
+async def test_editing_the_mark_updates_the_row(
     session, state, access_admin, two_companies
 ):
     truck = await repository.get_vehicle_by_plate(session, "AA1111AA")
     callback = FakeCallback(f"{VEHICLE_EDIT_PREFIX}:makemodel:{truck.id}")
     await on_vehicle_edit(callback, state, session, access_admin)
-    assert await state.get_state() == VehicleEdit.make_model
+    assert await state.get_state() == VehicleEdit.mark
 
-    await edit_make_model(FakeMessage("Renault Magnum"), state, session, access_admin)
+    await edit_mark_name(FakeMessage("Renault Magnum"), state, session, access_admin)
 
     updated = await repository.get_vehicle(session, truck.id)
     assert updated.make_model == "Renault Magnum"
@@ -322,7 +329,7 @@ async def test_company_admin_can_edit_own_vehicle(
 
     await on_vehicle_edit(callback, state, session, company_admin)
 
-    assert await state.get_state() == VehicleEdit.make_model
+    assert await state.get_state() == VehicleEdit.mark
 
 
 async def test_ordinary_user_cannot_browse_vehicles(session, state, access):

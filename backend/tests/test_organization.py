@@ -10,7 +10,27 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.models import Company, Employee, Position, Role, Vehicle
+from tests.conftest import seed_vehicle_mark, seed_vehicle_types
+from app.models import (
+    Company,
+    Employee,
+    Position,
+    Role,
+    Vehicle,
+    VehicleMark,
+    VehicleType,
+)
+
+
+@pytest.fixture
+async def refs(session):
+    """Довідники видів і марок — усе, на що тепер посилається машина."""
+    types = await seed_vehicle_types(session)
+    marks = {
+        name: await seed_vehicle_mark(session, name)
+        for name in ("Volvo FH", "Schmitz SKO", "Renault Magnum")
+    }
+    return types, marks
 
 
 async def _fixtures(session):
@@ -127,11 +147,12 @@ async def test_position_is_just_a_name(session):
     assert position.id is not None
 
 
-async def test_vehicle_belongs_to_a_company(session):
+async def test_vehicle_belongs_to_a_company(session, refs):
     company, _, _ = await _fixtures(session)
+    types, marks = refs
 
     vehicle = Vehicle(
-        type="Тягач", make_model="Renault Magnum",
+        type_id=types["Тягач"].id, mark_id=marks["Renault Magnum"].id,
         license_plate="AA1234BB", owner_company_id=company.id,
     )
     session.add(vehicle)
@@ -143,9 +164,34 @@ async def test_vehicle_belongs_to_a_company(session):
     assert loaded.owner_company.name == "ТОВ Ромашка"
 
 
-async def test_vehicle_company_is_optional(session):
+async def test_vehicle_reads_type_and_mark_from_the_references(session, refs):
+    """Вид і марка більше не колонки машини — вона їх лише читає."""
+    types, marks = refs
+    vehicle = Vehicle(
+        type_id=types["Зерновоз"].id, mark_id=marks["Renault Magnum"].id,
+        license_plate="AA0000AA",
+    )
+    session.add(vehicle)
+    await session.commit()
+
+    loaded = await session.scalar(
+        select(Vehicle).options(
+            selectinload(Vehicle.type), selectinload(Vehicle.mark)
+        )
+    )
+    assert loaded.type_name == "Зерновоз"
+    assert loaded.make_model == "Renault Magnum"
+    assert not loaded.is_tractor
+
+
+async def test_vehicle_company_is_optional(session, refs):
     """Власника могли не вказати — техніка від цього не перестає існувати."""
-    vehicle = Vehicle(type="Тягач", make_model="DAF XF", license_plate="BC5678CD")
+    types, marks = refs
+    vehicle = Vehicle(
+        type_id=types["Тягач"].id,
+        mark_id=marks["Renault Magnum"].id,
+        license_plate="BC5678CD",
+    )
     session.add(vehicle)
     await session.commit()
 
@@ -153,9 +199,10 @@ async def test_vehicle_company_is_optional(session):
     assert vehicle.owner_company_id is None
 
 
-async def test_vehicle_company_must_exist(session):
+async def test_vehicle_company_must_exist(session, refs):
+    types, marks = refs
     vehicle = Vehicle(
-        type="Тягач", make_model="Scania R450",
+        type_id=types["Тягач"].id, mark_id=marks["Renault Magnum"].id,
         license_plate="CD9012DE", owner_company_id=9999,
     )
     session.add(vehicle)
@@ -164,29 +211,73 @@ async def test_vehicle_company_must_exist(session):
         await session.commit()
 
 
-async def test_license_plate_is_unique(session):
-    """Номер унікальний на весь довідник, а не в межах виду: доки таблиць
-    було дві, тягач і причіп могли мати один номер — а це та сама машина
-    двічі, і в рейсі вони б переплутались."""
-    session.add(Vehicle(type="Тягач", make_model="Volvo FH", license_plate="AA1111AA"))
+async def test_vehicle_type_must_exist(session, refs):
+    """Вид тепер зв'язок, а не рядок: неіснуючий id має відхилятись."""
+    _, marks = refs
+    session.add(
+        Vehicle(type_id=9999, mark_id=marks["Renault Magnum"].id, license_plate="EF1111EF")
+    )
+
+    with pytest.raises(IntegrityError):
+        await session.commit()
+
+
+async def test_license_plate_is_unique(session, refs):
+    """Номер унікальний на весь довідник, а не в межах виду: інакше тягач і
+    причіп могли б мати один номер — а це та сама машина двічі."""
+    types, marks = refs
+    session.add(
+        Vehicle(type_id=types["Тягач"].id, mark_id=marks["Volvo FH"].id,
+                license_plate="AA1111AA")
+    )
     await session.commit()
 
     session.add(
-        Vehicle(type="Зерновоз", make_model="Schmitz SKO", license_plate="AA1111AA")
+        Vehicle(type_id=types["Зерновоз"].id, mark_id=marks["Volvo FH"].id,
+                license_plate="AA1111AA")
     )
     with pytest.raises(IntegrityError):
         await session.commit()
 
 
-def test_a_tractor_is_one_kind_the_rest_are_trailers():
-    """«Тягач чи причіп» не колонка, а наслідок виду."""
-    assert Vehicle(type="Тягач", make_model="x", license_plate="y").is_tractor
-    assert not Vehicle(type="Зерновоз", make_model="x", license_plate="y").is_tractor
+async def test_reference_names_are_unique_too(session, refs):
+    """Довідник, у якому «Volvo FH» лежить двічі, не довідник."""
+    session.add(VehicleMark(name="Volvo FH"))
+
+    with pytest.raises(IntegrityError):
+        await session.commit()
 
 
-@pytest.mark.parametrize("missing", ["type", "make_model", "license_plate"])
-async def test_vehicle_required_fields(session, missing):
-    values = {"type": "Тягач", "make_model": "MAN TGX", "license_plate": "DE3456EF"}
+async def test_a_tractor_is_a_flag_not_a_name(session, refs):
+    """«Тягач чи причіп» — прапорець у довіднику. Порівняння назви зламалось
+    би на «Сідловому тягачі» або на перейменованому рядку."""
+    types, marks = refs
+    saddle = VehicleType(name="Сідловий тягач", is_tractor=True)
+    session.add(saddle)
+    await session.commit()
+
+    vehicle = Vehicle(
+        type_id=saddle.id, mark_id=marks["Volvo FH"].id, license_plate="GG2222GG"
+    )
+    session.add(vehicle)
+    await session.commit()
+
+    loaded = await session.scalar(
+        select(Vehicle)
+        .where(Vehicle.license_plate == "GG2222GG")
+        .options(selectinload(Vehicle.type))
+    )
+    assert loaded.is_tractor
+
+
+@pytest.mark.parametrize("missing", ["type_id", "mark_id", "license_plate"])
+async def test_vehicle_required_fields(session, refs, missing):
+    types, marks = refs
+    values = {
+        "type_id": types["Тягач"].id,
+        "mark_id": marks["Volvo FH"].id,
+        "license_plate": "DE3456EF",
+    }
     values.pop(missing)
     session.add(Vehicle(**values))
 
@@ -194,12 +285,13 @@ async def test_vehicle_required_fields(session, missing):
         await session.commit()
 
 
-async def test_a_company_owns_its_vehicles(session):
+async def test_a_company_owns_its_vehicles(session, refs):
     """Одна таблиця на тягачі й причепи, один зв'язок від компанії."""
     company, _, _ = await _fixtures(session)
-    session.add(Vehicle(type="Тягач", make_model="Volvo FH",
+    types, marks = refs
+    session.add(Vehicle(type_id=types["Тягач"].id, mark_id=marks["Volvo FH"].id,
                         license_plate="AA0001AA", owner_company_id=company.id))
-    session.add(Vehicle(type="Зерновоз", make_model="Schmitz SKO",
+    session.add(Vehicle(type_id=types["Зерновоз"].id, mark_id=marks["Schmitz SKO"].id,
                         license_plate="AA0002AA", owner_company_id=company.id))
     await session.commit()
 

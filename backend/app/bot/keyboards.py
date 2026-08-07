@@ -20,9 +20,7 @@ from app.models import (
     CATEGORY_EMPLOYEES,
     CATEGORY_TRIPS,
     CATEGORY_VEHICLES,
-    TRAILER_TYPES,
     TRIP_STATUSES,
-    VEHICLE_TYPES,
     Application,
 )
 
@@ -66,8 +64,10 @@ TRIP_CLIENT_PREFIX = "trip:cli"
 TRIP_CLIENT_MANUAL = "trip:cli:manual"
 #: Статус: trip:st:<номер у TRIP_STATUSES>.
 TRIP_STATUS_PREFIX = "trip:st"
-#: Підказка зі списку: trip:pick:<grain|ttype>:<номер у переліку>.
+#: Підказка зі списку: trip:pick:grain:<номер у переліку>.
 TRIP_CHOICE_PREFIX = "trip:pick"
+#: Вид причепа при ручному вводі: trip:ttype:<id у vehicle_type>.
+TRIP_TTYPE_PREFIX = "trip:ttype"
 #: Час заїзду/виїзду: поточний момент або очистити поле.
 TRIP_NOW = "trip:now"
 TRIP_CLEAR = "trip:clear"
@@ -99,6 +99,13 @@ VEHICLE_EDIT_PREFIX = "vedit"
 VEHICLE_DELETE_PREFIX = "vdrop"
 VEHICLE_DELETE_CONFIRM = "vdropok"
 VEHICLE_TYPE_PREFIX = "veh:type"
+VEHICLE_MARK_PREFIX = "veh:mark"
+VEHICLE_MARK_ADD = "veh:mark:new"
+#: Довідник видів — окремий розділ головного адміністратора.
+MENU_VEHICLE_TYPES = "menu:vtypes"
+VTYPE_CARD_PREFIX = "vtype:card"
+VTYPE_ADD = "vtype:add"
+VTYPE_FLAG_PREFIX = "vtype:flag"
 VEHICLE_COMPANY_PREFIX = "veh:company"
 VEHICLE_CONFIRM = "veh:confirm"
 
@@ -107,18 +114,79 @@ VEHICLE_CONFIRM = "veh:confirm"
 VEHICLE_TITLES = {"truck": "Тягачі", "trailer": "Причепи"}
 
 
-def vehicle_type_keyboard() -> InlineKeyboardMarkup:
-    """Вид транспорту — перший крок додавання.
+def vehicle_type_keyboard(types) -> InlineKeyboardMarkup:
+    """Вид транспорту з довідника `vehicle_type`.
 
-    У callback_data їде номер, а не назва: назви кирилицею, а Telegram рахує
-    ті 64 байти. Тягач у переліку один, решта — причепи; окремого питання
-    «тягач чи причіп» немає, воно випливає з виду.
+    Перелік більше не в коді: види додає головний адміністратор, тож і
+    кнопки будуються з того, що є в базі.
     """
     builder = InlineKeyboardBuilder()
-    for index, title in enumerate(VEHICLE_TYPES):
-        builder.button(text=title, callback_data=f"{VEHICLE_TYPE_PREFIX}:{index}")
+    for vehicle_type in types:
+        builder.button(
+            text=vehicle_type.name,
+            callback_data=f"{VEHICLE_TYPE_PREFIX}:{vehicle_type.id}",
+        )
     builder.adjust(2)
     builder.row(InlineKeyboardButton(text="✖️ Скасувати", callback_data=FORM_CANCEL))
+    return builder.as_markup()
+
+
+def vehicle_mark_keyboard(marks) -> InlineKeyboardMarkup:
+    """Марка з довідника `vehicle_mark` плюс «додати нову».
+
+    Марок багато й вони непередбачувані, тож поповнює довідник той, хто
+    заводить машину: інакше він упирається в список і чекає на адміністратора.
+    """
+    builder = InlineKeyboardBuilder()
+    for mark in marks:
+        builder.button(
+            text=mark.name, callback_data=f"{VEHICLE_MARK_PREFIX}:{mark.id}"
+        )
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(text="➕ Додати марку", callback_data=VEHICLE_MARK_ADD)
+    )
+    builder.row(InlineKeyboardButton(text="✖️ Скасувати", callback_data=FORM_CANCEL))
+    return builder.as_markup()
+
+
+def vehicle_types_keyboard(
+    types=(), *, offset: int = 0, total: int | None = None
+) -> InlineKeyboardMarkup:
+    """Довідник видів для головного адміністратора."""
+    builder = InlineKeyboardBuilder()
+    for vehicle_type in types:
+        mark = "🚛 " if vehicle_type.is_tractor else "🚚 "
+        builder.button(
+            text=f"{mark}{vehicle_type.name}",
+            callback_data=f"{VTYPE_CARD_PREFIX}:{vehicle_type.id}",
+        )
+    builder.adjust(1)
+    if total is not None:
+        _add_pagination(
+            builder, "vtype", offset=offset, limit=PAGE_REFERENCE, total=total
+        )
+    builder.row(
+        InlineKeyboardButton(text="➕ Додати вид", callback_data=VTYPE_ADD)
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Меню", callback_data=MENU_BACK))
+    return builder.as_markup()
+
+
+def vehicle_type_card_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⬅️ До видів", callback_data=MENU_VEHICLE_TYPES)
+    return builder.as_markup()
+
+
+def vehicle_kind_flag_keyboard() -> InlineKeyboardMarkup:
+    """Чи новий вид — тягач. Питаємо явно: від цієї відповіді залежить, у якій
+    половині списку машина опиниться й куди її можна поставити в рейсі."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚛 Тягач", callback_data=f"{VTYPE_FLAG_PREFIX}:1")
+    builder.button(text="🚚 Причіп", callback_data=f"{VTYPE_FLAG_PREFIX}:0")
+    builder.button(text="✖️ Скасувати", callback_data=FORM_CANCEL)
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 
@@ -267,6 +335,7 @@ def main_menu_keyboard(access) -> InlineKeyboardMarkup:
     else:
         builder.button(text="🏢 Компанії", callback_data=MENU_COMPANIES)
         builder.button(text="💼 Посади", callback_data=MENU_POSITIONS)
+        builder.button(text="🚛 Види транспорту", callback_data=MENU_VEHICLE_TYPES)
         builder.button(text="🔑 Ролі й права", callback_data=MENU_ROLES)
 
     builder.button(text="ℹ️ Довідка", callback_data=MENU_HELP)
@@ -488,7 +557,7 @@ def vehicle_list_keyboard(
     builder = InlineKeyboardBuilder()
     for vehicle in vehicles:
         builder.button(
-            text=f"{vehicle.type} · {vehicle.make_model} - {vehicle.license_plate}",
+            text=f"{vehicle.type_name} · {vehicle.make_model} - {vehicle.license_plate}",
             callback_data=f"{VEHICLE_CARD_PREFIX}:{vehicle.id}",
         )
     builder.adjust(1)
@@ -791,8 +860,6 @@ def trip_status_keyboard(current: str) -> InlineKeyboardMarkup:
 #: короткий і латиницею; самі значення передаються номером.
 TRIP_CHOICES: dict[str, tuple[str, ...]] = {
     "grain": GRAIN_TYPES,
-    # Ті самі види, що й у довіднику, без тягача: причіп не буває тягачем.
-    "ttype": TRAILER_TYPES,
 }
 
 
@@ -804,6 +871,23 @@ def trip_choice_keyboard(kind: str, *, back: bool = False) -> InlineKeyboardMark
     for index, value in enumerate(TRIP_CHOICES[kind]):
         builder.button(
             text=value, callback_data=f"{TRIP_CHOICE_PREFIX}:{kind}:{index}"
+        )
+    builder.adjust(2)
+    _step_row(builder, back=back)
+    return builder.as_markup()
+
+
+def trip_trailer_type_keyboard(types, *, back: bool = False) -> InlineKeyboardMarkup:
+    """Вид причепа при ручному вводі — з довідника видів, без тягачів.
+
+    У callback_data їде id рядка, а не номер у списку: довідник поповнюють
+    люди, і позиція в ньому не є чимось сталим.
+    """
+    builder = InlineKeyboardBuilder()
+    for vehicle_type in types:
+        builder.button(
+            text=vehicle_type.name,
+            callback_data=f"{TRIP_TTYPE_PREFIX}:{vehicle_type.id}",
         )
     builder.adjust(2)
     _step_row(builder, back=back)
@@ -834,8 +918,8 @@ def trip_vehicle_keyboard(
     builder = InlineKeyboardBuilder()
     for vehicle in vehicles:
         label = (
-            vehicle.make_model if vehicle.type == VEHICLE_TYPES[0]
-            else f"{vehicle.type} · {vehicle.make_model}"
+            vehicle.make_model if vehicle.is_tractor
+            else f"{vehicle.type_name} · {vehicle.make_model}"
         )
         builder.button(
             text=f"{label} — {vehicle.license_plate}",

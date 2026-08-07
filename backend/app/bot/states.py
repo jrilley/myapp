@@ -60,6 +60,15 @@ class PositionForm(StatesGroup):
     name = State()
 
 
+class VehicleTypeForm(StatesGroup):
+    """Додавання виду транспорту. Доступно лише головному адміністратору."""
+
+    name = State()
+    #: Тягач чи причіп — питаємо явно: назва цього не каже, а від відповіді
+    #: залежить, у якій половині списку машина опиниться.
+    is_tractor = State()
+
+
 class VehicleForm(StatesGroup):
     """Додавання транспорту в довідник.
 
@@ -71,7 +80,10 @@ class VehicleForm(StatesGroup):
     #: це з нього й випливає.
     type = State()
     company = State()
-    make_model = State()
+    #: Марку обирають із довідника…
+    mark = State()
+    #: …або вводять нову, і вона одразу туди потрапляє.
+    mark_name = State()
     license_plate = State()
     confirm = State()
 
@@ -79,9 +91,10 @@ class VehicleForm(StatesGroup):
 class VehicleEdit(StatesGroup):
     """Редагування наявного транспорту з його картки."""
 
-    #: Вид обирається кнопкою, тому має власний стан.
+    #: Вид і марка обираються кнопками, тому мають власні стани.
     type = State()
-    make_model = State()
+    mark = State()
+    mark_name = State()
     license_plate = State()
 
 

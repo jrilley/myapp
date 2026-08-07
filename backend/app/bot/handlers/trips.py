@@ -71,6 +71,7 @@ from app.bot.keyboards import (
     TRIP_REDO_PREFIX,
     TRIP_SHOW_PREFIX,
     TRIP_STATUS_PREFIX,
+    TRIP_TTYPE_PREFIX,
     TRIP_VEHICLE_MANUAL,
     TRIP_VEHICLE_PREFIX,
     after_trip_keyboard,
@@ -87,6 +88,7 @@ from app.bot.keyboards import (
     trip_redo_keyboard,
     trip_status_keyboard,
     trip_step_keyboard,
+    trip_trailer_type_keyboard,
     trip_vehicle_keyboard,
 )
 from app.bot.publisher import Publisher
@@ -222,6 +224,26 @@ def _choice(callback_data: str | None, kind: str) -> str | None:
     options = TRIP_CHOICES.get(kind, ())
     index = int(parts[3])
     return options[index] if index < len(options) else None
+
+
+async def _trailer_type_name(
+    callback: CallbackQuery, session: AsyncSession
+) -> str | None:
+    """Назва виду причепа з callback_data. У ній id рядка довідника, а не
+    номер у списку: довідник поповнюють люди, і позиція в ньому не стала.
+
+    У рейс іде саме назва, а не посилання: рейс — документ, і він має
+    лишитись читабельним, якщо вид потім перейменують."""
+    type_id = (callback.data or "").rsplit(":", 1)[-1]
+    vehicle_type = (
+        await repository.get_vehicle_type(session, int(type_id))
+        if type_id.isdigit()
+        else None
+    )
+    if vehicle_type is None:
+        await callback.answer("Невідомий вид", show_alert=True)
+        return None
+    return vehicle_type.name
 
 
 def _masses(trip: Trip, column: str, value: int) -> tuple[dict, str | None]:
@@ -375,7 +397,9 @@ async def _ask_trailer_type(
     await state.set_state(TripForm.trailer_type)
     await message.answer(
         "Вид причепа — оберіть або введіть свій:",
-        reply_markup=trip_choice_keyboard("ttype", back=True),
+        reply_markup=trip_trailer_type_keyboard(
+            await repository.list_vehicle_types(session, tractors=False), back=True
+        ),
     )
 
 
@@ -854,7 +878,7 @@ async def step_trailer_pick(
     await state.update_data(
         trailer_id=vehicle.id,
         trailer=vehicle.make_model,
-        trailer_type=vehicle.type,
+        trailer_type=vehicle.type_name,
         trailer_license_plate=vehicle.license_plate,
     )
     await callback.answer()
@@ -875,14 +899,13 @@ async def step_trailer(
 
 
 @router.callback_query(
-    TripForm.trailer_type, F.data.startswith(f"{TRIP_CHOICE_PREFIX}:")
+    TripForm.trailer_type, F.data.startswith(f"{TRIP_TTYPE_PREFIX}:")
 )
 async def step_trailer_type_pick(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession
 ) -> None:
-    value = _choice(callback.data, "ttype")
+    value = await _trailer_type_name(callback, session)
     if value is None:
-        await callback.answer("Невідоме значення", show_alert=True)
         return
     await state.update_data(trailer_type=value)
     await callback.answer()
@@ -899,7 +922,10 @@ async def step_trailer_type(
     value = (message.text or "").strip()
     if error := _short_text(value):
         await message.answer(
-            error, reply_markup=trip_choice_keyboard("ttype", back=True)
+            error,
+            reply_markup=trip_trailer_type_keyboard(
+                await repository.list_vehicle_types(session, tractors=False), back=True
+            ),
         )
         return
     await state.update_data(trailer_type=value)
@@ -1667,7 +1693,7 @@ def _vehicle_values(kind: str, vehicle: Vehicle | None, **manual) -> dict:
     return {
         "trailer_id": vehicle.id if vehicle else None,
         "trailer": vehicle.make_model if vehicle else manual["name"],
-        "trailer_type": vehicle.type if vehicle else manual["type"],
+        "trailer_type": vehicle.type_name if vehicle else manual["type"],
         "trailer_license_plate": vehicle.license_plate if vehicle else manual["plate"],
     }
 
@@ -1761,7 +1787,9 @@ async def edit_vehicle_name(
     await state.set_state(TripEdit.vehicle_type)
     await message.answer(
         "Вид причепа — оберіть або введіть свій:",
-        reply_markup=trip_choice_keyboard("ttype"),
+        reply_markup=trip_trailer_type_keyboard(
+            await repository.list_vehicle_types(session, tractors=False)
+        ),
     )
 
 
@@ -1771,14 +1799,13 @@ async def _ask_vehicle_plate(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(
-    TripEdit.vehicle_type, F.data.startswith(f"{TRIP_CHOICE_PREFIX}:")
+    TripEdit.vehicle_type, F.data.startswith(f"{TRIP_TTYPE_PREFIX}:")
 )
 async def edit_vehicle_type_pick(
-    callback: CallbackQuery, state: FSMContext
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
 ) -> None:
-    value = _choice(callback.data, "ttype")
+    value = await _trailer_type_name(callback, session)
     if value is None:
-        await callback.answer("Невідоме значення", show_alert=True)
         return
     await state.update_data(vehicle_type=value)
     await callback.answer()
@@ -1787,10 +1814,17 @@ async def edit_vehicle_type_pick(
 
 
 @router.message(TripEdit.vehicle_type, F.text)
-async def edit_vehicle_type(message: Message, state: FSMContext) -> None:
+async def edit_vehicle_type(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
     value = (message.text or "").strip()
     if error := _short_text(value):
-        await message.answer(error, reply_markup=trip_choice_keyboard("ttype"))
+        await message.answer(
+            error,
+            reply_markup=trip_trailer_type_keyboard(
+                await repository.list_vehicle_types(session, tractors=False)
+            ),
+        )
         return
     await state.update_data(vehicle_type=value)
     await _ask_vehicle_plate(message, state)

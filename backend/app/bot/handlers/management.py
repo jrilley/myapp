@@ -25,7 +25,12 @@ from app.bot.access import (
     Access,
     resolve_company_id,
 )
-from app.bot.actions import render_company_employees, render_positions, render_roles
+from app.bot.actions import (
+    render_company_employees,
+    render_positions,
+    render_roles,
+    render_vehicle_types,
+)
 from app.bot.guards import deny, deny_main_admin
 from app.bot.constants import (
     MAX_ADDRESS,
@@ -34,6 +39,7 @@ from app.bot.constants import (
     MAX_PHONE,
     MAX_POSITION,
     MAX_TAX_ID,
+    MAX_VEHICLE_TYPE,
     MIN_PHONE,
     parse_chat_id,
 )
@@ -47,16 +53,27 @@ from app.bot.keyboards import (
     MENU_MY_COMPANY,
     MENU_MY_EMPLOYEES,
     MENU_POSITIONS,
+    MENU_VEHICLE_TYPES,
     MENU_ROLES,
     POSITION_ADD,
+    VTYPE_ADD,
+    VTYPE_CARD_PREFIX,
+    VTYPE_FLAG_PREFIX,
     POSITION_CARD_PREFIX,
     cancel_keyboard,
     company_card_keyboard,
     employee_card_keyboard,
     employee_choice_keyboard,
     position_card_keyboard,
+    vehicle_kind_flag_keyboard,
+    vehicle_type_card_keyboard,
 )
-from app.bot.states import CompanyEdit, EmployeeEdit, PositionForm
+from app.bot.states import (
+    CompanyEdit,
+    EmployeeEdit,
+    PositionForm,
+    VehicleTypeForm,
+)
 from app.models import Employee
 
 router = Router(name="management")
@@ -580,6 +597,114 @@ async def on_positions(
     await callback.message.answer(text, reply_markup=keyboard)
 
 
+@router.callback_query(F.data == MENU_VEHICLE_TYPES)
+async def on_vehicle_types(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    if await deny_main_admin(callback, access):
+        return
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        text, keyboard = await render_vehicle_types(session)
+        await callback.message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == VTYPE_ADD)
+async def on_vehicle_type_add(
+    callback: CallbackQuery, state: FSMContext, access: Access
+) -> None:
+    if await deny_main_admin(callback, access):
+        return
+    await state.clear()
+    await state.set_state(VehicleTypeForm.name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Назва виду (наприклад «Сідловий тягач»):", reply_markup=cancel_keyboard()
+        )
+
+
+@router.message(VehicleTypeForm.name, F.text)
+async def vehicle_type_name(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    value = (message.text or "").strip()
+    if not 2 <= len(value) <= MAX_VEHICLE_TYPE:
+        await message.answer(
+            f"Назва має бути від 2 до {MAX_VEHICLE_TYPE} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+    # name унікальний — ловимо тут, а не помилкою БД.
+    if await repository.get_vehicle_type_by_name(session, value):
+        await message.answer(
+            "Такий вид уже є. Введіть іншу назву.", reply_markup=cancel_keyboard()
+        )
+        return
+
+    await state.update_data(name=value)
+    await state.set_state(VehicleTypeForm.is_tractor)
+    await message.answer(
+        "Це тягач чи причіп? Від цієї відповіді залежить, у якій половині "
+        "списку опиниться машина й куди її можна поставити в рейсі.",
+        reply_markup=vehicle_kind_flag_keyboard(),
+    )
+
+
+@router.callback_query(
+    VehicleTypeForm.is_tractor, F.data.startswith(f"{VTYPE_FLAG_PREFIX}:")
+)
+async def vehicle_type_flag(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    if await deny_main_admin(callback, access):
+        return
+    raw = (callback.data or "").rsplit(":", 1)[-1]
+    data = await state.get_data()
+    await state.clear()
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    vehicle_type = await repository.create_vehicle_type(
+        session, name=data["name"], is_tractor=raw == "1"
+    )
+    text, keyboard = await render_vehicle_types(session)
+    await callback.message.answer(
+        f"✅ Вид «{escape(vehicle_type.name)}» додано.\n\n{text}",
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith(f"{VTYPE_CARD_PREFIX}:"))
+async def on_vehicle_type_card(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    if await deny_main_admin(callback, access):
+        return
+    raw_id = (callback.data or "").rsplit(":", 1)[-1]
+    vehicle_type = (
+        await repository.get_vehicle_type(session, int(raw_id))
+        if raw_id.isdigit()
+        else None
+    )
+    if vehicle_type is None:
+        await callback.answer("Невідомий вид", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        used = await repository.count_type_vehicles(session, vehicle_type.id)
+        await callback.message.answer(
+            f"<b>{escape(vehicle_type.name)}</b>\n\n"
+            f"{'Тягач' if vehicle_type.is_tractor else 'Причіп'}\n"
+            f"Машин цього виду: {used}",
+            reply_markup=vehicle_type_card_keyboard(),
+        )
+
+
 @router.callback_query(F.data == MENU_ROLES)
 async def on_roles(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
@@ -665,6 +790,7 @@ async def on_position_card(
 @router.message(EmployeeEdit.fullname)
 @router.message(EmployeeEdit.phone)
 @router.message(EmployeeEdit.phone2)
+@router.message(VehicleTypeForm.name)
 @router.message(PositionForm.name)
 async def non_text(message: Message) -> None:
     await message.answer(

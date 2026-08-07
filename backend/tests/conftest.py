@@ -12,7 +12,14 @@ from app.permissions import DEFAULT_MATRIX
 from app.config import Settings, get_settings
 from app.db import Base, create_engine, get_db
 from app.main import create_app
-from app.models import Application, Employee, Role
+from app.models import (
+    VEHICLE_TYPE_SEED,
+    Application,
+    Employee,
+    Role,
+    VehicleMark,
+    VehicleType,
+)
 
 TEST_ADMIN_TOKEN = "test-admin-token"
 
@@ -231,6 +238,24 @@ def session_factory(engine):
 async def session(session_factory):
     async with session_factory() as s:
         yield s
+
+
+async def seed_vehicle_types(session) -> dict[str, VehicleType]:
+    """Стартовий довідник видів — той самий, що кладе міграція."""
+    types = {
+        name: VehicleType(name=name, is_tractor=name == VEHICLE_TYPE_SEED[0])
+        for name in VEHICLE_TYPE_SEED
+    }
+    session.add_all(list(types.values()))
+    await session.commit()
+    return types
+
+
+async def seed_vehicle_mark(session, name: str) -> VehicleMark:
+    mark = VehicleMark(name=name)
+    session.add(mark)
+    await session.commit()
+    return mark
 
 
 @pytest.fixture

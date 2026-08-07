@@ -1,7 +1,7 @@
 {
   "$comment": "Згенеровано scripts/dump_schema.py з app/models.py. Не редагуйте вручну — змініть модель і перегенеруйте.",
   "source": "backend/app/models.py",
-  "alembic_head": "8ab5b0392923",
+  "alembic_head": "ca25af309fa0",
   "default_database_url": "sqlite+aiosqlite:///./applications.db",
   "enums": {
     "ApplicationStatus": {
@@ -504,6 +504,126 @@
       "foreign_keys": [],
       "indexes": []
     },
+    "vehicle_mark": {
+      "description": "Марка й модель одним рядком: «Volvo FH16», «Schmitz SKO24».",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "name",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": true,
+          "references": null,
+          "description": "Марка й модель, як їх називають."
+        }
+      ],
+      "unique_constraints": [
+        [
+          "name"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": []
+    },
+    "vehicle_type": {
+      "description": "Вид транспорту: «Тягач», «Зерновоз», «Самоскид».",
+      "primary_key": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": {
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
+          },
+          "python_type": "int",
+          "nullable": false,
+          "primary_key": true,
+          "autoincrement": true,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": null
+        },
+        {
+          "name": "name",
+          "type": {
+            "generic": "TEXT",
+            "sqlite": "TEXT",
+            "postgresql": "TEXT"
+          },
+          "python_type": "str",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": null,
+          "server_default": null,
+          "on_update": null,
+          "unique": true,
+          "references": null,
+          "description": "Назва виду, унікальна."
+        },
+        {
+          "name": "is_tractor",
+          "type": {
+            "generic": "BOOLEAN",
+            "sqlite": "BOOLEAN",
+            "postgresql": "BOOLEAN"
+          },
+          "python_type": "bool",
+          "nullable": false,
+          "primary_key": false,
+          "autoincrement": false,
+          "default": false,
+          "server_default": "0",
+          "on_update": null,
+          "unique": false,
+          "references": null,
+          "description": "Чи це тягач. Окрема колонка, а не порівняння назви з «Тягач»: довідник поповнюють люди, і «Сідловий тягач» або перейменований рядок мовчки зламали б поділ списку на тягачі й причепи."
+        }
+      ],
+      "unique_constraints": [
+        [
+          "name"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": []
+    },
     "employees": {
       "description": "Співробітник компанії, ідентифікований за Telegram-акаунтом.",
       "primary_key": [
@@ -884,7 +1004,7 @@
       "indexes": []
     },
     "vehicles": {
-      "description": "Тягач або причіп.",
+      "description": "Транспортний засіб: вид і марка з довідників плюс те, що належить\nсаме цій машині, — номер і власник.",
       "primary_key": [
         "id"
       ],
@@ -908,13 +1028,13 @@
           "description": null
         },
         {
-          "name": "type",
+          "name": "type_id",
           "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
           },
-          "python_type": "str",
+          "python_type": "int",
           "nullable": false,
           "primary_key": false,
           "autoincrement": false,
@@ -922,17 +1042,17 @@
           "server_default": null,
           "on_update": null,
           "unique": false,
-          "references": null,
-          "description": "Вид із VEHICLE_TYPES: «Тягач» або вид причепа («Зерновоз» тощо)."
+          "references": "vehicle_type.id",
+          "description": "Вид із довідника vehicle_type."
         },
         {
-          "name": "make_model",
+          "name": "mark_id",
           "type": {
-            "generic": "TEXT",
-            "sqlite": "TEXT",
-            "postgresql": "TEXT"
+            "generic": "INTEGER",
+            "sqlite": "INTEGER",
+            "postgresql": "INTEGER"
           },
-          "python_type": "str",
+          "python_type": "int",
           "nullable": false,
           "primary_key": false,
           "autoincrement": false,
@@ -940,8 +1060,8 @@
           "server_default": null,
           "on_update": null,
           "unique": false,
-          "references": null,
-          "description": "Марка й модель одним рядком, як їх називають."
+          "references": "vehicle_mark.id",
+          "description": "Марка й модель із довідника vehicle_mark."
         },
         {
           "name": "license_plate",
@@ -991,6 +1111,16 @@
       "foreign_keys": [
         {
           "columns": [
+            "mark_id"
+          ],
+          "references": [
+            "vehicle_mark.id"
+          ],
+          "on_delete": null,
+          "on_update": null
+        },
+        {
+          "columns": [
             "owner_company_id"
           ],
           "references": [
@@ -998,9 +1128,26 @@
           ],
           "on_delete": null,
           "on_update": null
+        },
+        {
+          "columns": [
+            "type_id"
+          ],
+          "references": [
+            "vehicle_type.id"
+          ],
+          "on_delete": null,
+          "on_update": null
         }
       ],
       "indexes": [
+        {
+          "name": "ix_vehicles_mark_id",
+          "columns": [
+            "mark_id"
+          ],
+          "unique": false
+        },
         {
           "name": "ix_vehicles_owner_company_id",
           "columns": [
@@ -1009,9 +1156,9 @@
           "unique": false
         },
         {
-          "name": "ix_vehicles_type",
+          "name": "ix_vehicles_type_id",
           "columns": [
-            "type"
+            "type_id"
           ],
           "unique": false
         }

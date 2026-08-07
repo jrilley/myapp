@@ -44,6 +44,8 @@ from app.bot.keyboards import (
     MENU_VEHICLE_ADD,
     VEHICLE_CARD_PREFIX,
     VEHICLE_COMPANY_PREFIX,
+    VEHICLE_MARK_ADD,
+    VEHICLE_MARK_PREFIX,
     VEHICLE_CONFIRM,
     VEHICLE_DELETE_CONFIRM,
     VEHICLE_DELETE_PREFIX,
@@ -55,40 +57,50 @@ from app.bot.keyboards import (
     vehicle_confirm_keyboard,
     vehicle_delete_confirm_keyboard,
     vehicle_kind_keyboard,
+    vehicle_mark_keyboard,
     vehicle_type_keyboard,
 )
 from app.bot.states import VehicleEdit, VehicleForm
-from app.models import VEHICLE_TYPES, Vehicle, is_tractor
+from app.models import Vehicle
 
 router = Router(name="vehicles")
 
 
-def _type_at(callback_data: str | None) -> str | None:
-    """«veh:type:<номер>» → вид транспорту, або None."""
+def _ref_id(callback_data: str | None) -> int | None:
+    """Останній сегмент callback_data як id довідника, або None."""
     raw = (callback_data or "").rsplit(":", 1)[-1]
-    if not raw.isdigit() or int(raw) >= len(VEHICLE_TYPES):
-        return None
-    return VEHICLE_TYPES[int(raw)]
+    return int(raw) if raw.isdigit() else None
 
 
 def _kind_of(vehicle: Vehicle) -> str:
     """До якої половини списку належить машина — щоб знати, куди повертати."""
-    return "truck" if is_tractor(vehicle.type) else "trailer"
+    return "truck" if vehicle.is_tractor else "trailer"
 
 
 @router.callback_query(F.data == MENU_VEHICLE_ADD)
 async def on_add_vehicle(
-    callback: CallbackQuery, state: FSMContext, access: Access
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
     if await deny(callback, access, CATEGORY_VEHICLES, CREATE):
         return
     await state.clear()
     await state.set_state(VehicleForm.type)
     await callback.answer()
-    if callback.message is not None:
+    if callback.message is None:
+        return
+
+    types = await repository.list_vehicle_types(session)
+    if not types:
+        await state.clear()
         await callback.message.answer(
-            "Який транспорт додаємо?", reply_markup=vehicle_type_keyboard()
+            "Довідник видів транспорту порожній. Зверніться до головного "
+            "адміністратора.",
+            reply_markup=menu_for(access),
         )
+        return
+    await callback.message.answer(
+        "Який транспорт додаємо?", reply_markup=vehicle_type_keyboard(types)
+    )
 
 
 @router.callback_query(VehicleForm.type, F.data.startswith("veh:type:"))
@@ -97,12 +109,17 @@ async def step_type(
 ) -> None:
     if await deny(callback, access, CATEGORY_VEHICLES, CREATE):
         return
-    vehicle_type = _type_at(callback.data)
+    type_id = _ref_id(callback.data)
+    vehicle_type = (
+        await repository.get_vehicle_type(session, type_id)
+        if type_id is not None
+        else None
+    )
     if vehicle_type is None:
         await callback.answer("Невідомий вид", show_alert=True)
         return
 
-    await state.update_data(type=vehicle_type)
+    await state.update_data(type_id=vehicle_type.id)
     await callback.answer()
     if callback.message is None:
         return
@@ -134,14 +151,73 @@ async def step_type(
         return
 
     await state.update_data(owner_company_id=company_id)
-    await _ask_make_model(callback.message, state)
+    await _ask_mark(callback.message, state, session)
 
 
-async def _ask_make_model(message: Message, state: FSMContext) -> None:
-    await state.set_state(VehicleForm.make_model)
+async def _ask_mark(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    await state.set_state(VehicleForm.mark)
+    marks = await repository.list_vehicle_marks(session)
     await message.answer(
-        "Марка й модель (наприклад «Volvo FH16»):", reply_markup=cancel_keyboard()
+        "Марка й модель:" if marks else "Довідник марок порожній — додайте першу.",
+        reply_markup=vehicle_mark_keyboard(marks),
     )
+
+
+async def _ask_plate(message: Message, state: FSMContext) -> None:
+    await state.set_state(VehicleForm.license_plate)
+    await message.answer("Державний номер:", reply_markup=cancel_keyboard())
+
+
+@router.callback_query(VehicleForm.mark, F.data == VEHICLE_MARK_ADD)
+async def step_mark_add(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(VehicleForm.mark_name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Марка й модель (наприклад «Volvo FH16»):",
+            reply_markup=cancel_keyboard(),
+        )
+
+
+@router.callback_query(VehicleForm.mark, F.data.startswith(f"{VEHICLE_MARK_PREFIX}:"))
+async def step_mark_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession
+) -> None:
+    mark_id = _ref_id(callback.data)
+    mark = (
+        await repository.get_vehicle_mark(session, mark_id)
+        if mark_id is not None
+        else None
+    )
+    if mark is None:
+        await callback.answer("Невідома марка", show_alert=True)
+        return
+    await state.update_data(mark_id=mark.id)
+    await callback.answer()
+    if callback.message is not None:
+        await _ask_plate(callback.message, state)
+
+
+@router.message(VehicleForm.mark_name, F.text)
+async def step_mark_name(
+    message: Message, state: FSMContext, session: AsyncSession
+) -> None:
+    """Нова марка потрапляє в довідник одразу: інакше той, хто заводить
+    машину, упирався б у список і чекав на адміністратора."""
+    value = (message.text or "").strip()
+    if not 1 <= len(value) <= MAX_VEHICLE_MAKE_MODEL:
+        await message.answer(
+            f"Марка й модель — від 1 до {MAX_VEHICLE_MAKE_MODEL} символів.",
+            reply_markup=cancel_keyboard(),
+        )
+        return
+
+    # Назва унікальна, тож наявну беремо як є, а не падаємо помилкою БД.
+    mark = await repository.get_vehicle_mark_by_name(session, value)
+    if mark is None:
+        mark = await repository.create_vehicle_mark(session, name=value)
+    await state.update_data(mark_id=mark.id)
+    await _ask_plate(message, state)
 
 
 @router.callback_query(
@@ -163,21 +239,7 @@ async def step_company(
     await state.update_data(owner_company_id=company.id, company_name=company.name)
     await callback.answer()
     if callback.message is not None:
-        await _ask_make_model(callback.message, state)
-
-
-@router.message(VehicleForm.make_model, F.text)
-async def step_make_model(message: Message, state: FSMContext) -> None:
-    value = (message.text or "").strip()
-    if not 1 <= len(value) <= MAX_VEHICLE_MAKE_MODEL:
-        await message.answer(
-            f"Марка й модель — від 1 до {MAX_VEHICLE_MAKE_MODEL} символів.",
-            reply_markup=cancel_keyboard(),
-        )
-        return
-    await state.update_data(make_model=value)
-    await state.set_state(VehicleForm.license_plate)
-    await message.answer("Державний номер:", reply_markup=cancel_keyboard())
+        await _ask_mark(callback.message, state, session)
 
 
 @router.message(VehicleForm.license_plate, F.text)
@@ -206,10 +268,15 @@ async def step_license_plate(
     data = await state.get_data()
     company = await repository.get_company(session, data["owner_company_id"])
     company_name = company.name if company else "—"
+    # Назви беремо з довідників, а не з даних форми: у стані лежать самі id.
+    # Дублювати туди ще й назви означало б тримати дві правди про один рядок —
+    # і падати на екрані підтвердження, якщо стан лишився від старої версії.
+    vehicle_type = await repository.get_vehicle_type(session, data["type_id"])
+    mark = await repository.get_vehicle_mark(session, data["mark_id"])
     await message.answer(
         "<b>Перевірте дані:</b>\n\n"
-        f"<b>Вид:</b> {escape(data['type'])}\n"
-        f"<b>Марка й модель:</b> {escape(data['make_model'])}\n"
+        f"<b>Вид:</b> {escape(vehicle_type.name if vehicle_type else '—')}\n"
+        f"<b>Марка й модель:</b> {escape(mark.name if mark else '—')}\n"
         f"<b>Номер:</b> {escape(value)}\n"
         f"<b>Власник:</b> {escape(company_name)}",
         reply_markup=vehicle_confirm_keyboard(),
@@ -239,13 +306,13 @@ async def step_confirm(
 
     vehicle = await repository.create_vehicle(
         session,
-        type=data["type"],
-        make_model=data["make_model"],
+        type_id=data["type_id"],
+        mark_id=data["mark_id"],
         license_plate=data["license_plate"],
         owner_company_id=data["owner_company_id"],
     )
     await callback.message.answer(
-        f"✅ {escape(vehicle.type)} {escape(vehicle.make_model)} "
+        f"✅ {escape(vehicle.type_name)} {escape(vehicle.make_model)} "
         f"({escape(vehicle.license_plate)}) додано під #{vehicle.id}.",
         reply_markup=menu_for(access),
     )
@@ -259,7 +326,7 @@ async def step_confirm(
 def _card(vehicle: Vehicle) -> str:
     company = vehicle.owner_company.name if vehicle.owner_company else "—"
     return (
-        f"<b>{escape(vehicle.type)}</b>\n\n"
+        f"<b>{escape(vehicle.type_name)}</b>\n\n"
         f"<b>Марка й модель:</b> {escape(vehicle.make_model)}\n"
         f"<b>Номер:</b> {escape(vehicle.license_plate)}\n"
         f"<b>Власник:</b> {escape(company)}"
@@ -415,11 +482,7 @@ async def on_vehicle_edit(
         return
     _, field, raw_id = parts
 
-    prompts = {
-        "makemodel": (VehicleEdit.make_model, "Нові марка й модель:"),
-        "plate": (VehicleEdit.license_plate, "Новий державний номер:"),
-    }
-    if field != "type" and field not in prompts:
+    if field not in ("type", "makemodel", "plate"):
         await callback.answer("Невідоме поле", show_alert=True)
         return
 
@@ -433,34 +496,75 @@ async def on_vehicle_edit(
         return
 
     if field == "type":
-        # Вид — з переліку, як і при додаванні: інакше в довіднику завелись би
-        # «зерновоз» і «Зерновоз» як два різні види.
         await state.set_state(VehicleEdit.type)
         await callback.message.answer(
-            "Новий вид:", reply_markup=vehicle_type_keyboard()
+            "Новий вид:",
+            reply_markup=vehicle_type_keyboard(
+                await repository.list_vehicle_types(session)
+            ),
         )
         return
+    if field == "makemodel":
+        await _ask_mark(callback.message, state, session)
+        await state.set_state(VehicleEdit.mark)
+        return
 
-    next_state, prompt = prompts[field]
-    await state.set_state(next_state)
-    await callback.message.answer(prompt, reply_markup=cancel_keyboard())
+    await state.set_state(VehicleEdit.license_plate)
+    await callback.message.answer(
+        "Новий державний номер:", reply_markup=cancel_keyboard()
+    )
 
 
 @router.callback_query(VehicleEdit.type, F.data.startswith("veh:type:"))
 async def edit_type(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
-    vehicle_type = _type_at(callback.data)
+    type_id = _ref_id(callback.data)
+    vehicle_type = (
+        await repository.get_vehicle_type(session, type_id)
+        if type_id is not None
+        else None
+    )
     if vehicle_type is None:
         await callback.answer("Невідомий вид", show_alert=True)
         return
     await callback.answer()
     if callback.message is not None:
-        await _apply_edit(callback.message, state, session, access, type=vehicle_type)
+        await _apply_edit(
+            callback.message, state, session, access, type_id=vehicle_type.id
+        )
 
 
-@router.message(VehicleEdit.make_model, F.text)
-async def edit_make_model(
+@router.callback_query(VehicleEdit.mark, F.data == VEHICLE_MARK_ADD)
+async def edit_mark_add(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(VehicleEdit.mark_name)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Марка й модель:", reply_markup=cancel_keyboard()
+        )
+
+
+@router.callback_query(VehicleEdit.mark, F.data.startswith(f"{VEHICLE_MARK_PREFIX}:"))
+async def edit_mark_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession, access: Access
+) -> None:
+    mark_id = _ref_id(callback.data)
+    mark = (
+        await repository.get_vehicle_mark(session, mark_id)
+        if mark_id is not None
+        else None
+    )
+    if mark is None:
+        await callback.answer("Невідома марка", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await _apply_edit(callback.message, state, session, access, mark_id=mark.id)
+
+
+@router.message(VehicleEdit.mark_name, F.text)
+async def edit_mark_name(
     message: Message, state: FSMContext, session: AsyncSession, access: Access
 ) -> None:
     value = (message.text or "").strip()
@@ -470,7 +574,10 @@ async def edit_make_model(
             reply_markup=cancel_keyboard(),
         )
         return
-    await _apply_edit(message, state, session, access, make_model=value)
+    mark = await repository.get_vehicle_mark_by_name(session, value)
+    if mark is None:
+        mark = await repository.create_vehicle_mark(session, name=value)
+    await _apply_edit(message, state, session, access, mark_id=mark.id)
 
 
 @router.message(VehicleEdit.license_plate, F.text)
@@ -530,7 +637,7 @@ async def on_vehicle_delete(
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            f"Видалити {escape(vehicle.type.lower())} "
+            f"Видалити {escape(vehicle.type_name.lower())} "
             f"{escape(vehicle.make_model)} {escape(vehicle.license_plate)}?",
             reply_markup=vehicle_delete_confirm_keyboard(
                 vehicle.id, f"{VEHICLE_CARD_PREFIX}:{vehicle.id}"
@@ -569,9 +676,9 @@ async def on_vehicle_delete_confirm(
             await callback.message.answer(text, reply_markup=keyboard)
 
 
-@router.message(VehicleForm.make_model)
+@router.message(VehicleForm.mark_name)
 @router.message(VehicleForm.license_plate)
-@router.message(VehicleEdit.make_model)
+@router.message(VehicleEdit.mark_name)
 @router.message(VehicleEdit.license_plate)
 async def non_text(message: Message) -> None:
     await message.answer(

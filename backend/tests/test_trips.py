@@ -99,6 +99,7 @@ from app.bot.keyboards import (
     TRIP_REDO_PREFIX,
     TRIP_SHOW_PREFIX,
     TRIP_STATUS_PREFIX,
+    TRIP_TTYPE_PREFIX,
     TRIP_VEHICLE_MANUAL,
     TRIP_VEHICLE_PREFIX,
 )
@@ -113,6 +114,8 @@ from app.models import (
 )
 from tests.conftest import (
     ADMIN_ID,
+    seed_vehicle_mark,
+    seed_vehicle_types,
     OWNER_ID,
     STRANGER_ID,
     FakeCallback,
@@ -815,13 +818,13 @@ async def test_editing_records_who_and_when(session, state, boss, trips, publish
 
 
 async def test_editing_a_plate_rejects_the_other_one(
-    session, state, logist, trips, publisher
+    session, state, logist, trips, publisher, vtypes
 ):
     """Номери тягача й причепа не можуть збігатися: це та сама машина."""
     await _start_edit(session, state, logist, trips.mine.id, "trailer")
     await edit_vehicle_manual(FakeCallback(f"{TRIP_VEHICLE_MANUAL}:trailer"), state)
     await edit_vehicle_name(FakeMessage("Schmitz"), state, session, logist)
-    await edit_vehicle_type(FakeMessage("Зерновоз"), state)
+    await edit_vehicle_type(FakeMessage("Зерновоз"), state, session)
 
     message = FakeMessage("AA1111AA")  # номер тягача цього ж рейсу
     await edit_vehicle_plate(message, state, session, logist, publisher)
@@ -1412,7 +1415,9 @@ async def test_typed_grain_still_works(session, state, world, logist):
     assert (await state.get_data())["grain_type"] == "Пшениця 2 клас"
 
 
-async def test_trailer_type_is_picked_from_the_hints(session, state, world, logist):
+async def test_trailer_type_is_picked_from_the_hints(
+    session, state, world, logist, vtypes
+):
     await on_new_trip(FakeCallback(MENU_TRIP_NEW, user=FakeUser(OWNER_ID)), state, logist)
     await step_ttn(FakeMessage("ТТН-999"), state, session)
     await step_arrival_date(FakeCallback(f"{TRIP_DATE_PREFIX}:2026-08-10"), state, session)
@@ -1427,7 +1432,7 @@ async def test_trailer_type_is_picked_from_the_hints(session, state, world, logi
     await step_trailer(FakeMessage("Schmitz"), state, session)
 
     await step_trailer_type_pick(
-        FakeCallback(f"{TRIP_CHOICE_PREFIX}:ttype:0"), state, session
+        FakeCallback(f"{TRIP_TTYPE_PREFIX}:{vtypes['Зерновоз'].id}"), state, session
     )
 
     assert (await state.get_data())["trailer_type"] == "Зерновоз"
@@ -1566,18 +1571,27 @@ async def test_an_unknown_redo_key_is_refused(session, state, world, logist):
 
 
 @pytest.fixture
-async def fleet(session, world):
+async def vtypes(session):
+    return await seed_vehicle_types(session)
+
+
+@pytest.fixture
+async def fleet(session, world, vtypes):
     """Тягач і причіп нашої компанії плюс чужий тягач."""
+    marks = {
+        name: await seed_vehicle_mark(session, name)
+        for name in ("Volvo FH16", "Schmitz SKO24", "Scania R450")
+    }
     tractor = Vehicle(
-        type="Тягач", make_model="Volvo FH16",
+        type_id=vtypes["Тягач"].id, mark_id=marks["Volvo FH16"].id,
         license_plate="AA5555AA", owner_company_id=world.ours.id,
     )
     trailer = Vehicle(
-        type="Зерновоз", make_model="Schmitz SKO24",
+        type_id=vtypes["Зерновоз"].id, mark_id=marks["Schmitz SKO24"].id,
         license_plate="CC7777CC", owner_company_id=world.ours.id,
     )
     foreign = Vehicle(
-        type="Тягач", make_model="Scania R450",
+        type_id=vtypes["Тягач"].id, mark_id=marks["Scania R450"].id,
         license_plate="ZZ9999ZZ", owner_company_id=world.theirs.id,
     )
     session.add_all([tractor, trailer, foreign])
